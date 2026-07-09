@@ -1,7 +1,7 @@
 {
   "name": "onmhj",
-  "version": "0.1.6",
-  "description": "Local AI-session worklog capture with device-aware merge and git-backed sync.",
+  "version": "0.1.7",
+  "description": "Local AI-session worklog capture with language-aware reports and git-backed sync.",
   "author": {
     "name": "user_name"
   },
@@ -12,7 +12,7 @@
   "interface": {
     "displayName": "Onmhj",
     "shortDescription": "Record AI-session worklogs locally.",
-    "longDescription": "Captures Codex hook events to local JSONL, then flushes device-tagged daily raw and markdown logs to a user-registered git repository. Flush pulls and merges existing raw logs before committing. Daily report generation defaults to active Codex/Claude Code auth; API mode is reserved for explicit bulk backfills.",
+    "longDescription": "Captures Codex hook events to local JSONL, then flushes device-tagged daily raw and language-aware markdown logs to a user-registered git repository. Flush pulls and merges existing raw logs before committing. Daily report generation defaults to active Codex/Claude Code auth; API mode is reserved for explicit bulk backfills.",
     "developerName": "user_name",
     "category": "Productivity",
     "capabilities": ["Lifecycle hooks", "Local storage", "Git sync"],

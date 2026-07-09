@@ -12,8 +12,8 @@ function usage() {
   return [
     'Usage:',
     '  onmhj hook <event>',
-    '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--report-auth=agent|api]',
-    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
+    '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--report-lang=en|ko] [--report-auth=agent|api]',
+    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--report-lang=en|ko] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
@@ -45,11 +45,17 @@ function config() {
     deviceId: cfg.deviceId || defaultDeviceId(),
     ownerName: cfg.ownerName || globalGitConfig('user.name') || os.userInfo().username,
     ownerEmail: cfg.ownerEmail || globalGitConfig('user.email') || '',
+    reportLanguage: cfg.reportLanguage || userLanguage(),
     reportAuth: cfg.reportAuth || 'agent',
     reportApiBaseUrl: cfg.reportApiBaseUrl || '',
     reportApiModel: cfg.reportApiModel || '',
     reportApiKeyEnv: cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV,
   };
+}
+
+function userLanguage() {
+  const locale = process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || '';
+  return String(locale).toLowerCase().startsWith('ko') ? 'ko' : 'en';
 }
 
 function defaultDeviceId() {
@@ -245,6 +251,7 @@ function parseOptions(args) {
     if (arg.startsWith('--device-id=')) opts.deviceId = arg.slice('--device-id='.length);
     if (arg.startsWith('--owner-name=')) opts.ownerName = arg.slice('--owner-name='.length);
     if (arg.startsWith('--owner-email=')) opts.ownerEmail = arg.slice('--owner-email='.length);
+    if (arg.startsWith('--report-lang=')) opts.reportLanguage = arg.slice('--report-lang='.length);
     if (arg.startsWith('--report-auth=')) opts.reportAuth = arg.slice('--report-auth='.length);
     if (arg.startsWith('--report-api-base=')) opts.reportApiBaseUrl = arg.slice('--report-api-base='.length);
     if (arg.startsWith('--report-model=')) opts.reportApiModel = arg.slice('--report-model='.length);
@@ -284,6 +291,7 @@ function register(repoPath, opts) {
     deviceId: cfg.deviceId,
     ownerName: cfg.ownerName,
     ownerEmail: cfg.ownerEmail,
+    reportLanguage: cfg.reportLanguage,
     reportAuth: cfg.reportAuth,
   });
   process.stdout.write(`registered ${resolved}\n`);
@@ -299,6 +307,9 @@ function validateConfigOptions(opts) {
   }
   if (opts.reportAuth && !['agent', 'api'].includes(opts.reportAuth)) {
     throw new Error('report auth must be agent or api');
+  }
+  if (opts.reportLanguage && !['en', 'ko'].includes(opts.reportLanguage)) {
+    throw new Error('report language must be en or ko');
   }
   for (const key of ['reportApiBaseUrl', 'reportApiModel', 'reportApiKeyEnv']) {
     if (opts[key] && /[\r\n]/.test(opts[key])) throw new Error(`${key} must be a single line`);
@@ -319,6 +330,7 @@ function applyOwnerConfig(cfg, opts) {
 }
 
 function applyReportConfig(cfg, opts) {
+  if (opts.reportLanguage) cfg.reportLanguage = opts.reportLanguage;
   if (opts.reportAuth) cfg.reportAuth = opts.reportAuth;
   if (opts.reportApiBaseUrl) cfg.reportApiBaseUrl = opts.reportApiBaseUrl;
   if (opts.reportApiModel) cfg.reportApiModel = opts.reportApiModel;
@@ -343,7 +355,7 @@ function reportRuntime(cfg) {
 
 function configure(opts) {
   validateConfigOptions(opts);
-  if (!opts.promptMode && !opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
+  if (!opts.promptMode && !opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && !opts.reportLanguage && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
     throw new Error(usage());
   }
   const cfg = config();
@@ -359,9 +371,10 @@ function configure(opts) {
     deviceId: cfg.deviceId,
     ownerName: cfg.ownerName,
     ownerEmail: cfg.ownerEmail,
+    reportLanguage: cfg.reportLanguage,
     reportAuth: cfg.reportAuth,
   });
-  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} reportAuth=${cfg.reportAuth}\n`);
+  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} reportLanguage=${cfg.reportLanguage} reportAuth=${cfg.reportAuth}\n`);
 }
 
 function eventDedupeKey(event) {
@@ -488,7 +501,33 @@ function loadEventsForLocalDate(cfg, date) {
     .sort((a, b) => String(a.tsUtc || a.ts).localeCompare(String(b.tsUtc || b.ts)));
 }
 
-function summarize(events, date) {
+function reportLabels(language) {
+  if (language === 'ko') {
+    return {
+      title: 'AI 작업 기록',
+      timeZone: '시간대',
+      timeline: '타임라인: UTC timestamps',
+      events: '이벤트',
+      devices: '장치',
+      repositories: '저장소',
+      prompts: '프롬프트',
+      more: count => `... ${count}개 더`,
+    };
+  }
+  return {
+    title: 'AI worklog',
+    timeZone: 'Time zone',
+    timeline: 'Timeline: UTC timestamps',
+    events: 'Events',
+    devices: 'Devices',
+    repositories: 'Repositories',
+    prompts: 'Prompts',
+    more: count => `... ${count} more`,
+  };
+}
+
+function summarize(events, date, language = 'en') {
+  const labels = reportLabels(language);
   const byRepo = new Map();
   const byDevice = new Map();
   for (const event of events) {
@@ -504,14 +543,14 @@ function summarize(events, date) {
   }
 
   const lines = [
-    `# ${date} AI worklog`,
+    `# ${date} ${labels.title}`,
     '',
-    `Time zone: ${events[0] && events[0].timeZone ? events[0].timeZone : 'unknown'}`,
-    'Timeline: UTC timestamps',
+    `${labels.timeZone}: ${events[0] && events[0].timeZone ? events[0].timeZone : 'unknown'}`,
+    labels.timeline,
     '',
-    `Events: ${events.length}`,
+    `${labels.events}: ${events.length}`,
     '',
-    '## Devices',
+    `## ${labels.devices}`,
     '',
   ];
   for (const [device, count] of byDevice.entries()) {
@@ -519,15 +558,15 @@ function summarize(events, date) {
   }
   lines.push(
     '',
-    '## Repositories',
+    `## ${labels.repositories}`,
     '',
   );
   for (const [repo, row] of byRepo.entries()) {
-    lines.push(`### ${repo}`, '', `Events: ${row.count}`, '');
+    lines.push(`### ${repo}`, '', `${labels.events}: ${row.count}`, '');
     if (row.prompts.length) {
-      lines.push('Prompts:', '');
+      lines.push(`${labels.prompts}:`, '');
       for (const prompt of row.prompts.slice(0, 50)) lines.push(`- ${prompt}`);
-      if (row.prompts.length > 50) lines.push(`- ... ${row.prompts.length - 50} more`);
+      if (row.prompts.length > 50) lines.push(`- ${labels.more(row.prompts.length - 50)}`);
       lines.push('');
     }
   }
@@ -561,7 +600,7 @@ function flush(date, opts) {
   fs.mkdirSync(path.dirname(dailyTarget), { recursive: true });
   const merged = mergeEvents(loadEvents(rawTarget), events);
   fs.writeFileSync(rawTarget, merged.map(event => JSON.stringify(event)).join('\n') + '\n');
-  fs.writeFileSync(dailyTarget, summarize(merged, key));
+  fs.writeFileSync(dailyTarget, summarize(merged, key, cfg.reportLanguage));
 
   run('git', ['add', rawTarget, dailyTarget], cfg.repoPath);
   const diff = run('git', ['diff', '--cached', '--quiet'], cfg.repoPath, true);
@@ -607,6 +646,7 @@ function status() {
     `deviceId: ${cfg.deviceId}`,
     `ownerName: ${cfg.ownerName}`,
     `ownerEmail: ${cfg.ownerEmail || '(unset)'}`,
+    `reportLanguage: ${cfg.reportLanguage}`,
     `reportAuth: ${report.auth}`,
     `reportApiBase: ${cfg.reportApiBaseUrl || '(unset)'}`,
     `reportModel: ${cfg.reportApiModel || '(unset)'}`,
@@ -623,7 +663,7 @@ function selftest() {
   run('git', ['init'], repo);
   run('git', ['config', 'user.email', 'onmhj@example.local'], repo);
   run('git', ['config', 'user.name', 'onmhj'], repo);
-  writeJson(CONFIG_PATH, { repoPath: repo, stateDir: state, promptMode: 'preview', timeZone: 'Asia/Seoul' });
+  writeJson(CONFIG_PATH, { repoPath: repo, stateDir: state, promptMode: 'preview', timeZone: 'Asia/Seoul', reportLanguage: 'ko' });
   const existingRaw = path.join(repo, 'raw', 'ai-sessions', '2026-07-09.jsonl');
   fs.mkdirSync(path.dirname(existingRaw), { recursive: true });
   fs.writeFileSync(existingRaw, JSON.stringify({
@@ -645,13 +685,13 @@ function selftest() {
     event: 'UserPromptSubmit',
     cwd: repo,
     gitRoot: repo,
-    promptPreview: '테스트 작업 token=redaction-fixture-value [REDACTION_FIXTURE]',
+    promptPreview: 'test work token=redaction-fixture-value [REDACTION_FIXTURE]',
   }));
   flush('2026-07-09', { noPush: true });
   const daily = fs.readFileSync(path.join(repo, 'daily', '2026-07-09.md'), 'utf8');
   const raw = fs.readFileSync(path.join(repo, 'raw', 'ai-sessions', '2026-07-09.jsonl'), 'utf8');
   if (!daily) throw new Error('daily file missing');
-  if (!daily.includes('## Devices')) throw new Error('device summary missing');
+  if (!daily.includes('## 장치')) throw new Error('localized device summary missing');
   if (!raw.includes('"deviceId":"other-device"')) throw new Error('existing raw event was not preserved');
   if (daily.includes('redaction-fixture-value') || raw.includes('[REDACTION_FIXTURE]')) {
     throw new Error('secret redaction failed');
@@ -670,6 +710,8 @@ function selftest() {
   if (updated.timeZone !== 'UTC' || updated.promptMode !== 'off') throw new Error('config update failed');
   configure({ deviceId: 'test-device' });
   if (config().deviceId !== 'test-device') throw new Error('device config failed');
+  configure({ reportLanguage: 'en' });
+  if (config().reportLanguage !== 'en') throw new Error('report language config failed');
   configure({ ownerName: 'onmhj-owner', ownerEmail: 'owner@example.local' });
   const ownerCfg = config();
   if (ownerCfg.ownerName !== 'onmhj-owner' || ownerCfg.ownerEmail !== 'owner@example.local') {

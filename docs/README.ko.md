@@ -12,6 +12,7 @@
 - git sync/push는 명시적으로 `flush`할 때만 한다.
 - `flush`는 report repo를 먼저 pull하고, 기존 raw 로그와 현재 컴퓨터의 local event를 병합/dedupe한 뒤 commit한다.
 - 일반적인 하루 단위 리포트 생성은 활성 Codex/Claude Code auth를 기본값으로 쓴다(`reportAuth=agent`).
+- report markdown 언어는 `reportLanguage`를 따르며, 기본값은 사용자 locale에서 정한다.
 - OpenAI 호환 API 설정은 대량 백필 작업용 선택 경로다.
 - git-history 백필은 설정된 owner identity가 author 또는 committer인 커밋만 포함해야 한다.
 - 프롬프트 저장 기본값은 `preview`다. 필요하면 `full` 또는 `off`로 바꾼다.
@@ -54,7 +55,7 @@ node bin/onmhj.js config --device-id=macbook-pro
 owner/report auth 정책 설정:
 
 ```sh
-node bin/onmhj.js config --owner-name=TraceofLight --owner-email=you@example.com --report-auth=agent
+node bin/onmhj.js config --owner-name=TraceofLight --owner-email=you@example.com --report-lang=ko --report-auth=agent
 ```
 
 대량 백필용 API 모드:

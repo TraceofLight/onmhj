@@ -96,8 +96,10 @@ node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config \
 Daily `ejmhj` report generation should use the active Codex or Claude Code session auth by default:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --report-auth=agent
+node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent
 ```
+
+`report-lang` controls generated markdown language. It defaults from the user's locale when unset. Prompt templates and plugin command text stay in English.
 
 Use OpenAI-compatible API settings only for explicit bulk backfill jobs:
 

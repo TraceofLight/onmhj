@@ -14,6 +14,7 @@ Korean documentation: [docs/README.ko.md](./docs/README.ko.md)
 - Git sync and push only happen when `flush` is run explicitly.
 - `flush` pulls the report repo, merges existing raw logs with this device's local events, dedupes, then commits.
 - Normal daily report generation defaults to the active Codex/Claude Code auth (`reportAuth=agent`).
+- Report markdown language follows `reportLanguage`, which defaults from the user's locale.
 - OpenAI-compatible API settings are optional and intended for bulk backfill jobs.
 - Git-history backfills must include only commits authored or committed by the configured owner identity.
 - Prompt capture defaults to `preview`. Use `full` or `off` when needed.
@@ -56,7 +57,7 @@ node bin/onmhj.js config --device-id=macbook-pro
 Set owner/report auth policy:
 
 ```sh
-node bin/onmhj.js config --owner-name=TraceofLight --owner-email=you@example.com --report-auth=agent
+node bin/onmhj.js config --owner-name=TraceofLight --owner-email=you@example.com --report-lang=ko --report-auth=agent
 ```
 
 Optional API mode for bulk backfill:
