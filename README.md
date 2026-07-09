@@ -56,6 +56,8 @@ codex plugin marketplace add /path/to/user/Documents/Github/onmhj
 codex plugin add onmhj@onmhj-local
 ```
 
+Codex는 `.agents/plugins/marketplace.json`를 marketplace manifest로 읽는다.
+
 설치 후 `/hooks`에서 hook을 승인하고 새 세션을 시작한다.
 
 기록 위치:

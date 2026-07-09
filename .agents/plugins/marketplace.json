@@ -1,0 +1,20 @@
+{
+  "name": "onmhj-local",
+  "interface": {
+    "displayName": "Onmhj Local"
+  },
+  "plugins": [
+    {
+      "name": "onmhj",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
