@@ -629,27 +629,42 @@ function confirmedFloor(cfg) {
   return minDateKey([local, remote]);
 }
 
+function reportScheduleState(cfg, now = new Date()) {
+  const localConfirmedThrough = readLocalConfirmation(cfg).confirmedThrough || '';
+  const remoteConfirmedFloor = minDateKey(readDeviceConfirmations(cfg).map(item => item.confirmedThrough));
+  return {
+    throughDate: previousLocalDateKey(now, cfg.timeZone),
+    localConfirmedThrough,
+    remoteConfirmedFloor,
+    confirmedFloor: minDateKey([localConfirmedThrough, remoteConfirmedFloor]),
+  };
+}
+
+function shouldScheduleReportDate(date, state) {
+  if (!state.localConfirmedThrough || date > state.localConfirmedThrough) return true;
+  return Boolean(state.remoteConfirmedFloor && date > state.remoteConfirmedFloor);
+}
+
 function tryScheduleReportJobs(cfg, now = new Date(), opts = {}) {
-  const throughDate = previousLocalDateKey(now, cfg.timeZone);
+  const state = reportScheduleState(cfg, now);
   // The floor is intentionally the minimum across devices; a late device can
   // lower it so merged reports are regenerated from the earliest uncertain day.
-  const floor = confirmedFloor(cfg);
   let count = 0;
-  for (const date of localEventDates(cfg, throughDate)) {
-    if (floor && date <= floor) continue;
+  for (const date of localEventDates(cfg, state.throughDate)) {
     const current = readReportJob(cfg, date);
+    if (!shouldScheduleReportDate(date, state)) continue;
     const job = enqueueReportJob(cfg, date, { force: current && current.status === 'completed' });
     if (!job) continue;
     count += 1;
     writeInternalLog(cfg, 'report_job_enqueued', {
       date,
-      confirmedFloor: floor,
+      confirmedFloor: state.confirmedFloor,
       status: job.status,
       attempts: job.attempts,
     });
   }
   if (!count) return false;
-  writeInternalLog(cfg, 'report_job_scan', { confirmedFloor: floor, throughDate, queued: count });
+  writeInternalLog(cfg, 'report_job_scan', { confirmedFloor: state.confirmedFloor, throughDate: state.throughDate, queued: count });
   if (opts.spawn !== false) spawnWorker(cfg);
   return true;
 }
@@ -1127,16 +1142,30 @@ function main() {
   throw new Error(usage());
 }
 
-try {
-  main();
-} catch (err) {
+function setConfigPath(file) {
+  CONFIG_PATH = file;
+}
+
+module.exports = {
+  config,
+  readReportJob,
+  reportScheduleState,
+  setConfigPath,
+  tryScheduleReportJobs,
+};
+
+if (require.main === module) {
   try {
-    writeInternalLog(config(), 'error', {
-      command: process.argv.slice(2).join(' '),
-      ...errorDetails(err),
-    });
-  } catch {}
-  if (process.argv[2] === 'hook') process.exit(0);
-  process.stderr.write((err && err.message ? err.message : String(err)) + '\n');
-  process.exit(1);
+    main();
+  } catch (err) {
+    try {
+      writeInternalLog(config(), 'error', {
+        command: process.argv.slice(2).join(' '),
+        ...errorDetails(err),
+      });
+    } catch {}
+    if (process.argv[2] === 'hook') process.exit(0);
+    process.stderr.write((err && err.message ? err.message : String(err)) + '\n');
+    process.exit(1);
+  }
 }
