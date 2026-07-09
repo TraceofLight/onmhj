@@ -1,4 +1,4 @@
-# onmhj
+# 🤔 onmhj
 
 AI-session worklog capture for Codex and Claude Code.
 
@@ -60,29 +60,7 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 
 ## Workflow
 
-```mermaid
-flowchart TD
-  A[Codex/Claude Code session] --> B[SessionStart/UserPromptSubmit hook]
-  B --> C[Redact prompt fields]
-  C --> D[Append local JSONL spool<br/>~/.local/state/onmhj/events/YYYY-MM-DD.jsonl]
-  E[Manual backfill<br/>inject/import] --> D
-
-  Q[Confirmed watermarks<br/>local + state/devices/*.json] --> F
-  B -->|SessionStart| F[Enqueue unconfirmed report dates<br/>after confirmed floor]
-  F --> G[Detached background worker<br/>onmhj worker]
-  G -->|pull + recompute floor| F
-  G --> H[flush YYYY-MM-DD]
-  H --> I[git pull report repo]
-  I --> J[Merge existing raw + local spool]
-  J --> K[Dedupe by sourceId/event fingerprint]
-  K --> L[Write raw/ai-sessions/YYYY-MM-DD.jsonl]
-  K --> M[Regenerate daily/YYYY-MM-DD.md<br/>language = reportLanguage]
-  L --> N[git commit/push]
-  M --> N
-  N -->|success| O[Mark job completed<br/>advance confirmedThrough]
-  N -->|failure| P[Mark failed + nextAttemptAt]
-  P -->|exponential backoff| G
-```
+![onmhj workflow](./docs/assets/workflow.svg)
 
 `confirmedThrough` advances only in date order. If an earlier report is waiting for retry, later jobs stay pending. If another device later exposes an older `confirmedThrough`, the floor drops and affected dates are queued again.
 

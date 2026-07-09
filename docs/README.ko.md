@@ -1,4 +1,4 @@
-# onmhj
+# 🤔 onmhj
 
 Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 
@@ -60,29 +60,7 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 
 ## Workflow
 
-```mermaid
-flowchart TD
-  A[Codex/Claude Code session] --> B[SessionStart/UserPromptSubmit hook]
-  B --> C[Redact prompt fields]
-  C --> D[Append local JSONL spool<br/>~/.local/state/onmhj/events/YYYY-MM-DD.jsonl]
-  E[Manual backfill<br/>inject/import] --> D
-
-  Q[Confirmed watermarks<br/>local + state/devices/*.json] --> F
-  B -->|SessionStart| F[Enqueue unconfirmed report dates<br/>after confirmed floor]
-  F --> G[Detached background worker<br/>onmhj worker]
-  G -->|pull + recompute floor| F
-  G --> H[flush YYYY-MM-DD]
-  H --> I[git pull report repo]
-  I --> J[Merge existing raw + local spool]
-  J --> K[Dedupe by sourceId/event fingerprint]
-  K --> L[Write raw/ai-sessions/YYYY-MM-DD.jsonl]
-  K --> M[Regenerate daily/YYYY-MM-DD.md<br/>language = reportLanguage]
-  L --> N[git commit/push]
-  M --> N
-  N -->|success| O[Mark job completed<br/>advance confirmedThrough]
-  N -->|failure| P[Mark failed + nextAttemptAt]
-  P -->|exponential backoff| G
-```
+![onmhj workflow](./assets/workflow.svg)
 
 `confirmedThrough`는 날짜 순서대로만 전진한다. 앞 날짜 report가 retry 대기 중이면 뒤 날짜 job은 pending 상태로 둔다. 다른 device가 나중에 더 오래된 `confirmedThrough`를 노출하면 floor를 낮추고 영향 날짜를 다시 queue한다.
 
