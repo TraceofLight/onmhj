@@ -12,6 +12,7 @@ function usage() {
     'Usage:',
     '  onmhj hook <event>',
     '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City]',
+    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City]',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
     '  onmhj status',
     '  onmhj selftest',
@@ -229,10 +230,7 @@ function register(repoPath, opts) {
   const resolved = path.resolve(repoPath);
   if (!fs.existsSync(resolved)) throw new Error(`repo not found: ${resolved}`);
   if (!isGitRepo(resolved)) throw new Error(`not a git repo: ${resolved}`);
-  if (opts.promptMode && !['preview', 'full', 'off'].includes(opts.promptMode)) {
-    throw new Error('prompt mode must be preview, full, or off');
-  }
-  if (opts.timeZone) localDateKey(new Date(), opts.timeZone);
+  validateConfigOptions(opts);
   const cfg = config();
   cfg.repoPath = resolved;
   if (opts.promptMode) cfg.promptMode = opts.promptMode;
@@ -244,6 +242,27 @@ function register(repoPath, opts) {
     timeZone: cfg.timeZone,
   });
   process.stdout.write(`registered ${resolved}\n`);
+}
+
+function validateConfigOptions(opts) {
+  if (opts.promptMode && !['preview', 'full', 'off'].includes(opts.promptMode)) {
+    throw new Error('prompt mode must be preview, full, or off');
+  }
+  if (opts.timeZone) localDateKey(new Date(), opts.timeZone);
+}
+
+function configure(opts) {
+  validateConfigOptions(opts);
+  if (!opts.promptMode && !opts.timeZone) throw new Error(usage());
+  const cfg = config();
+  if (opts.promptMode) cfg.promptMode = opts.promptMode;
+  if (opts.timeZone) cfg.timeZone = opts.timeZone;
+  writeJson(CONFIG_PATH, cfg);
+  writeInternalLog(cfg, 'config', {
+    promptMode: cfg.promptMode,
+    timeZone: cfg.timeZone,
+  });
+  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone}\n`);
 }
 
 function loadEvents(file) {
@@ -399,6 +418,9 @@ function selftest() {
   const internal = fs.readFileSync(internalLogFile(config()), 'utf8');
   if (!internal.includes('"action":"hook_start"')) throw new Error('hook_start log missing');
   if (!internal.includes('"action":"hook_success"')) throw new Error('hook_success log missing');
+  configure({ timeZone: 'UTC', promptMode: 'off' });
+  const updated = config();
+  if (updated.timeZone !== 'UTC' || updated.promptMode !== 'off') throw new Error('config update failed');
   process.stdout.write('selftest ok\n');
 }
 
@@ -407,6 +429,7 @@ function main() {
   const opts = parseOptions([first, ...rest].filter(Boolean));
   if (cmd === 'hook') return hook(first || 'unknown');
   if (cmd === 'register') return register(first, opts);
+  if (cmd === 'config') return configure(opts);
   if (cmd === 'flush') return flush(first && !first.startsWith('--') ? first : undefined, opts);
   if (cmd === 'status') return status();
   if (cmd === 'selftest') return selftest();

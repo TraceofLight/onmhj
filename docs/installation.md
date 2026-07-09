@@ -73,6 +73,12 @@ Check config:
 node /path/to/user/Documents/Github/onmhj/bin/onmhj.js status
 ```
 
+Update prompt or timezone without changing the registered repo:
+
+```sh
+node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
+```
+
 Config is stored at:
 
 ```txt

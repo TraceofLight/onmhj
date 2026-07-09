@@ -36,6 +36,12 @@ Status:
 node bin/onmhj.js status
 ```
 
+Update prompt or timezone config:
+
+```sh
+node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
+```
+
 Flush today's records, commit, and push:
 
 ```sh

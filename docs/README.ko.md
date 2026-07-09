@@ -34,6 +34,12 @@ node bin/onmhj.js register /path/to/worklog-git-repo --timezone=Asia/Seoul
 node bin/onmhj.js status
 ```
 
+prompt 또는 timezone 설정 변경:
+
+```sh
+node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
+```
+
 오늘치 기록 생성, commit, push:
 
 ```sh
