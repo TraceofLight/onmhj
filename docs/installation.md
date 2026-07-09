@@ -211,6 +211,8 @@ If internal logs are empty too, the plugin hook is not running. Reinstall or re-
 
 If the hook cannot find Node, install Node or make sure the non-interactive shell used by Codex can resolve `node`.
 
+If Windows Codex reports `SessionStart hook (failed)` or `UserPromptSubmit hook (failed)` with exit code 1 after install, check `hooks/codex-hooks.json`. Version `0.1.10` had POSIX-only hook commands, which PowerShell parsed as invalid syntax. Version `0.1.11` adds `commandWindows` entries for Codex on Windows. Reinstall with `codex plugin add onmhj@onmhj-local`, then start a new session.
+
 ## Claude Code
 
 The Claude Code plugin manifest lives at:

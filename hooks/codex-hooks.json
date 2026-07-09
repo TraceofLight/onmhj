@@ -7,6 +7,7 @@
           {
             "type": "command",
             "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${ONMHJ_ROOT:-}}}\"; [ -n \"$ONMHJ_ROOT\" ] || exit 0; exec node \"$ONMHJ_ROOT/bin/onmhj.js\" hook SessionStart",
+            "commandWindows": "$ONMHJ_ROOT = if ($env:CLAUDE_PLUGIN_ROOT) { $env:CLAUDE_PLUGIN_ROOT } elseif ($env:CODEX_PLUGIN_ROOT) { $env:CODEX_PLUGIN_ROOT } elseif ($env:ONMHJ_ROOT) { $env:ONMHJ_ROOT } else { '' }; if (-not $ONMHJ_ROOT) { exit 0 }; node (Join-Path $ONMHJ_ROOT 'bin\\onmhj.js') hook SessionStart",
             "timeout": 5,
             "statusMessage": "Recording onmhj session..."
           }
@@ -19,6 +20,7 @@
           {
             "type": "command",
             "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${ONMHJ_ROOT:-}}}\"; [ -n \"$ONMHJ_ROOT\" ] || exit 0; exec node \"$ONMHJ_ROOT/bin/onmhj.js\" hook UserPromptSubmit",
+            "commandWindows": "$ONMHJ_ROOT = if ($env:CLAUDE_PLUGIN_ROOT) { $env:CLAUDE_PLUGIN_ROOT } elseif ($env:CODEX_PLUGIN_ROOT) { $env:CODEX_PLUGIN_ROOT } elseif ($env:ONMHJ_ROOT) { $env:ONMHJ_ROOT } else { '' }; if (-not $ONMHJ_ROOT) { exit 0 }; node (Join-Path $ONMHJ_ROOT 'bin\\onmhj.js') hook UserPromptSubmit",
             "timeout": 5,
             "statusMessage": "Recording onmhj prompt..."
           }
