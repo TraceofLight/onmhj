@@ -22,19 +22,29 @@
 
 ## Workflow
 
-1. Codex 또는 Claude Code plugin을 설치한다.
-2. `onmhj register`로 외부 report repo 하나를 등록한다.
-3. Codex/Claude Code session 안에서 hook이 실행되고, redaction된 local JSONL event만 append한다.
-4. 각 event에는 UTC 시간, local report date, repo path, session id, prompt preview, `deviceId`가 들어간다.
-5. 백필은 필요할 때 `inject` 또는 `import`로 같은 local spool에 정규화 event를 넣는다.
-6. `flush [date]`는 설정된 timezone의 날짜 기준 local event를 읽는다.
-7. upstream이 있으면 `flush`가 report repo를 먼저 pull한다.
-8. `flush`는 기존 raw report event와 현재 컴퓨터 local event를 병합하고 dedupe한다.
-9. `flush`는 `raw/ai-sessions/YYYY-MM-DD.jsonl`을 쓰고 `daily/YYYY-MM-DD.md`를 재생성한다.
-10. daily markdown은 `reportLanguage`를 따르고, plugin prompt는 영어로 유지한다.
-11. `flush`는 `--no-push`가 없으면 commit 후 push한다.
+```mermaid
+flowchart TD
+  A[Codex/Claude Code session] --> B[SessionStart/UserPromptSubmit hook]
+  B --> C[Redact prompt fields]
+  C --> D[Append local JSONL spool<br/>~/.local/state/onmhj/events/YYYY-MM-DD.jsonl]
+  E[Manual backfill<br/>inject/import] --> D
 
-여러 컴퓨터가 같은 report repo를 써도 된다. 각 컴퓨터에 안정적인 `deviceId`를 두면, flush 때 다른 device의 기존 event를 보존하고 합친 daily report를 다시 만든다.
+  B -->|next local day SessionStart| F[Enqueue yesterday report job<br/>~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json]
+  F --> G[Detached background worker<br/>onmhj worker]
+  G --> H[flush YYYY-MM-DD]
+  H --> I[git pull report repo]
+  I --> J[Merge existing raw + local spool]
+  J --> K[Dedupe by sourceId/event fingerprint]
+  K --> L[Write raw/ai-sessions/YYYY-MM-DD.jsonl]
+  K --> M[Regenerate daily/YYYY-MM-DD.md<br/>language = reportLanguage]
+  L --> N[git commit/push]
+  M --> N
+  N -->|success| O[Mark job completed]
+  N -->|failure| P[Mark failed + nextAttemptAt]
+  P -->|exponential backoff| G
+```
+
+여러 컴퓨터가 같은 report repo를 써도 된다. 각 컴퓨터에 안정적인 `deviceId`를 두면, flush 때 다른 device의 기존 event를 보존하고 합친 daily report를 다시 만든다. 실패한 자동 report job은 flush가 성공할 때까지 background에서 재시도한다.
 
 ## 사용
 
@@ -123,5 +133,7 @@ Claude Code는 로컬 marketplace로 설치할 수 있다.
 - config: `~/.config/onmhj/config.json`
 - local events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl` UTC date
 - internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl` UTC date, prompt excluded
+- report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
+- worker log: `~/.local/state/onmhj/worker.log`
 - registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`, report local date 기준 병합본
 - registered repo daily: `daily/YYYY-MM-DD.md` local date, device별/전체 repo 요약 포함

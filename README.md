@@ -24,19 +24,29 @@ Korean documentation: [docs/README.ko.md](./docs/README.ko.md)
 
 ## Workflow
 
-1. Install the Codex or Claude Code plugin.
-2. Register one external report repo with `onmhj register`.
-3. Hooks run inside Codex/Claude Code sessions and append redacted local JSONL events only.
-4. Each event records UTC time, local report date, repo path, session id, prompt preview, and `deviceId`.
-5. Optional backfill uses `inject` or `import` to add normalized events to the same local spool.
-6. `flush [date]` loads local events for the configured timezone date.
-7. `flush` pulls the report repo when an upstream exists.
-8. `flush` merges existing raw report events with this device's local events and dedupes them.
-9. `flush` writes `raw/ai-sessions/YYYY-MM-DD.jsonl` and regenerates `daily/YYYY-MM-DD.md`.
-10. Daily markdown follows `reportLanguage`; plugin prompts stay English.
-11. `flush` commits and pushes unless `--no-push` is passed.
+```mermaid
+flowchart TD
+  A[Codex/Claude Code session] --> B[SessionStart/UserPromptSubmit hook]
+  B --> C[Redact prompt fields]
+  C --> D[Append local JSONL spool<br/>~/.local/state/onmhj/events/YYYY-MM-DD.jsonl]
+  E[Manual backfill<br/>inject/import] --> D
 
-Multiple computers can use the same report repo. Give each computer a stable `deviceId`; every flush preserves existing events from other devices and regenerates the combined daily report.
+  B -->|next local day SessionStart| F[Enqueue yesterday report job<br/>~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json]
+  F --> G[Detached background worker<br/>onmhj worker]
+  G --> H[flush YYYY-MM-DD]
+  H --> I[git pull report repo]
+  I --> J[Merge existing raw + local spool]
+  J --> K[Dedupe by sourceId/event fingerprint]
+  K --> L[Write raw/ai-sessions/YYYY-MM-DD.jsonl]
+  K --> M[Regenerate daily/YYYY-MM-DD.md<br/>language = reportLanguage]
+  L --> N[git commit/push]
+  M --> N
+  N -->|success| O[Mark job completed]
+  N -->|failure| P[Mark failed + nextAttemptAt]
+  P -->|exponential backoff| G
+```
+
+Multiple computers can use the same report repo. Give each computer a stable `deviceId`; every flush preserves existing events from other devices and regenerates the combined daily report. Failed automatic report jobs keep retrying in the background until a flush succeeds.
 
 ## Usage
 
@@ -125,5 +135,7 @@ Record locations:
 - config: `~/.config/onmhj/config.json`
 - local events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl` UTC date
 - internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl` UTC date, prompt excluded
+- report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
+- worker log: `~/.local/state/onmhj/worker.log`
 - registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`, merged by local report date
 - registered repo daily: `daily/YYYY-MM-DD.md` local date, with device and combined repository summaries

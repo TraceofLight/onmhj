@@ -17,6 +17,7 @@ function usage() {
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
+    '  onmhj worker',
     '  onmhj status',
     '  onmhj selftest',
   ].join('\n');
@@ -94,12 +95,20 @@ function localDateKey(date = new Date(), timeZone = systemTimeZone()) {
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
+function previousLocalDateKey(date = new Date(), timeZone = systemTimeZone()) {
+  return localDateKey(new Date(date.getTime() - 24 * 60 * 60 * 1000), timeZone);
+}
+
 function eventFile(cfg, date = utcDateKey()) {
   return path.join(cfg.stateDir, 'events', date + '.jsonl');
 }
 
 function internalLogFile(cfg, date = utcDateKey()) {
   return path.join(cfg.stateDir, 'internal', date + '.jsonl');
+}
+
+function workerLogFile(cfg) {
+  return path.join(cfg.stateDir, 'worker.log');
 }
 
 function appendLine(file, line) {
@@ -221,6 +230,9 @@ function hook(event) {
       localDate: record.localDate,
       sessionId: record.sessionId,
     });
+    if (event === 'SessionStart') {
+      tryScheduleYesterdayReport(cfg, now);
+    }
   } catch (err) {
     writeInternalLog(cfg, 'hook_error', {
       event,
@@ -459,6 +471,113 @@ function importEvents(file) {
   process.stdout.write(`imported ${added}, skipped ${skipped}\n`);
 }
 
+function reportJobsDir(cfg) {
+  return path.join(cfg.stateDir, 'jobs', 'reports');
+}
+
+function reportJobFile(cfg, date) {
+  return path.join(reportJobsDir(cfg), date + '.json');
+}
+
+function reportJobLockFile(cfg, date) {
+  return path.join(reportJobsDir(cfg), date + '.lock');
+}
+
+function workerLockFile(cfg) {
+  return path.join(reportJobsDir(cfg), 'worker.lock');
+}
+
+function readReportJob(cfg, date) {
+  return readJson(reportJobFile(cfg, date), null);
+}
+
+function writeReportJob(cfg, job) {
+  writeJson(reportJobFile(cfg, job.date), job);
+}
+
+function listReportJobs(cfg) {
+  try {
+    return fs.readdirSync(reportJobsDir(cfg))
+      .filter(file => /^\d{4}-\d{2}-\d{2}\.json$/.test(file))
+      .map(file => readJson(path.join(reportJobsDir(cfg), file), null))
+      .filter(Boolean)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  } catch {
+    return [];
+  }
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireLock(file) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const existing = readJson(file, null);
+  if (existing && existing.pid && !pidAlive(existing.pid)) {
+    try { fs.unlinkSync(file); } catch {}
+  }
+  try {
+    fs.writeFileSync(file, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }) + '\n', { flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function releaseLock(file) {
+  try { fs.unlinkSync(file); } catch {}
+}
+
+function enqueueReportJob(cfg, date) {
+  const current = readReportJob(cfg, date);
+  if (current && current.status === 'completed') return null;
+  const now = new Date().toISOString();
+  const job = {
+    date,
+    status: current && current.status ? current.status : 'pending',
+    attempts: current && current.attempts ? current.attempts : 0,
+    createdAt: current && current.createdAt ? current.createdAt : now,
+    updatedAt: now,
+    nextAttemptAt: current && current.nextAttemptAt ? current.nextAttemptAt : now,
+    lastError: current && current.lastError ? current.lastError : '',
+  };
+  if (job.status === 'running') job.status = 'pending';
+  writeReportJob(cfg, job);
+  return job;
+}
+
+function retryDelayMs(attempts) {
+  return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.pow(2, Math.min(attempts, 6)) * 60 * 1000));
+}
+
+function tryScheduleYesterdayReport(cfg, now = new Date()) {
+  const date = previousLocalDateKey(now, cfg.timeZone);
+  if (!loadEventsForLocalDate(cfg, date).length) return false;
+  const job = enqueueReportJob(cfg, date);
+  if (!job) return false;
+  writeInternalLog(cfg, 'report_job_enqueued', { date, status: job.status, attempts: job.attempts });
+  spawnWorker(cfg);
+  return true;
+}
+
+function spawnWorker(cfg) {
+  fs.mkdirSync(path.dirname(workerLogFile(cfg)), { recursive: true });
+  const out = fs.openSync(workerLogFile(cfg), 'a');
+  const child = childProcess.spawn(process.execPath, [__filename, 'worker'], {
+    detached: true,
+    stdio: ['ignore', out, out],
+    env: { ...process.env, ONMHJ_CONFIG: CONFIG_PATH },
+  });
+  child.unref();
+  fs.closeSync(out);
+}
+
 function loadEvents(file) {
   try {
     return fs.readFileSync(file, 'utf8')
@@ -630,16 +749,106 @@ function flush(date, opts) {
   process.stdout.write(`flushed ${key}\n`);
 }
 
+function runReportJob(cfg, date) {
+  const lock = reportJobLockFile(cfg, date);
+  if (!acquireLock(lock)) return false;
+  try {
+    const now = new Date().toISOString();
+    const current = readReportJob(cfg, date) || enqueueReportJob(cfg, date);
+    const attempts = (current.attempts || 0) + 1;
+    writeReportJob(cfg, {
+      ...current,
+      date,
+      status: 'running',
+      attempts,
+      updatedAt: now,
+      lastStartedAt: now,
+    });
+    try {
+      flush(date, {});
+      writeReportJob(cfg, {
+        ...readReportJob(cfg, date),
+        date,
+        status: 'completed',
+        updatedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        lastError: '',
+      });
+      writeInternalLog(cfg, 'report_job_completed', { date, attempts });
+      return true;
+    } catch (err) {
+      const nextAttemptAt = new Date(Date.now() + retryDelayMs(attempts)).toISOString();
+      writeReportJob(cfg, {
+        ...readReportJob(cfg, date),
+        date,
+        status: 'failed',
+        updatedAt: new Date().toISOString(),
+        nextAttemptAt,
+        lastError: err && err.message ? err.message : String(err),
+      });
+      writeInternalLog(cfg, 'report_job_failed', { date, attempts, nextAttemptAt, ...errorDetails(err) });
+      return false;
+    }
+  } finally {
+    releaseLock(lock);
+  }
+}
+
+function processReportJobs(cfg) {
+  const now = Date.now();
+  let nextDelay = 0;
+  for (const job of listReportJobs(cfg)) {
+    if (job.status === 'completed') continue;
+    const due = Date.parse(job.nextAttemptAt || job.createdAt || new Date().toISOString());
+    if (!Number.isNaN(due) && due > now) {
+      const wait = due - now;
+      nextDelay = nextDelay ? Math.min(nextDelay, wait) : wait;
+      continue;
+    }
+    runReportJob(cfg, job.date);
+  }
+  for (const job of listReportJobs(cfg)) {
+    if (job.status === 'completed') continue;
+    const due = Date.parse(job.nextAttemptAt || new Date().toISOString());
+    const wait = Number.isNaN(due) ? 0 : Math.max(0, due - Date.now());
+    nextDelay = nextDelay ? Math.min(nextDelay, wait) : wait;
+  }
+  return nextDelay;
+}
+
+function worker() {
+  const cfg = config();
+  const lock = workerLockFile(cfg);
+  if (!acquireLock(lock)) {
+    writeInternalLog(cfg, 'worker_already_running');
+    return;
+  }
+  const tick = () => {
+    const nextDelay = processReportJobs(cfg);
+    if (nextDelay) {
+      writeInternalLog(cfg, 'worker_sleep', { nextDelayMs: nextDelay });
+      setTimeout(tick, nextDelay);
+      return;
+    }
+    releaseLock(lock);
+    writeInternalLog(cfg, 'worker_done');
+  };
+  process.on('exit', () => releaseLock(lock));
+  tick();
+}
+
 function status() {
   const cfg = config();
   const key = localDateKey(new Date(), cfg.timeZone);
   const events = loadEventsForLocalDate(cfg, key);
   const logFile = internalLogFile(cfg);
   const report = reportRuntime(cfg);
+  const jobs = listReportJobs(cfg);
   process.stdout.write([
     `config: ${CONFIG_PATH}`,
     `state: ${cfg.stateDir}`,
     `internalLog: ${logFile}`,
+    `workerLog: ${workerLogFile(cfg)}`,
     `repo: ${cfg.repoPath || '(not registered)'}`,
     `prompt: ${cfg.promptMode}`,
     `timeZone: ${cfg.timeZone}`,
@@ -651,6 +860,7 @@ function status() {
     `reportApiBase: ${cfg.reportApiBaseUrl || '(unset)'}`,
     `reportModel: ${cfg.reportApiModel || '(unset)'}`,
     `reportApiKeyEnv: ${cfg.reportApiKeyEnv}`,
+    `reportJobs: pending=${jobs.filter(job => job.status === 'pending').length} running=${jobs.filter(job => job.status === 'running').length} failed=${jobs.filter(job => job.status === 'failed').length} completed=${jobs.filter(job => job.status === 'completed').length}`,
     `todayEvents: ${events.length}`,
   ].join('\n') + '\n');
 }
@@ -696,6 +906,10 @@ function selftest() {
   if (daily.includes('redaction-fixture-value') || raw.includes('[REDACTION_FIXTURE]')) {
     throw new Error('secret redaction failed');
   }
+  enqueueReportJob(config(), '2026-07-09');
+  runReportJob(config(), '2026-07-09');
+  const job = readReportJob(config(), '2026-07-09');
+  if (!job || job.status !== 'completed') throw new Error('report job did not complete');
   const hookRun = childProcess.spawnSync(process.execPath, [__filename, 'hook', 'UserPromptSubmit'], {
     env: { ...process.env, ONMHJ_CONFIG: CONFIG_PATH },
     input: JSON.stringify({ cwd: repo, session_id: 'selftest', prompt: 'hook token=redaction-fixture-value' }),
@@ -758,6 +972,7 @@ function main() {
   if (cmd === 'inject') return inject(opts);
   if (cmd === 'import') return importEvents(first);
   if (cmd === 'flush') return flush(first && !first.startsWith('--') ? first : undefined, opts);
+  if (cmd === 'worker') return worker();
   if (cmd === 'status') return status();
   if (cmd === 'selftest') return selftest();
   throw new Error(usage());

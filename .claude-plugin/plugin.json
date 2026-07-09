@@ -1,7 +1,7 @@
 {
   "name": "onmhj",
-  "version": "0.1.7",
-  "description": "Local AI-session worklog capture with language-aware reports and git-backed sync.",
+  "version": "0.1.8",
+  "description": "Local AI-session worklog capture with auto-retrying daily reports.",
   "author": {
     "name": "user_name"
   },
