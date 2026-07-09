@@ -1,0 +1,12 @@
+{
+  "name": "onmhj",
+  "version": "0.1.2",
+  "description": "Local AI-session worklog capture and git-backed daily sync.",
+  "author": {
+    "name": "user_name"
+  },
+  "repository": "https://github.com/TraceofLight/onmhj",
+  "license": "MIT",
+  "keywords": ["worklog", "claude-code", "hooks", "git"],
+  "hooks": "./hooks/codex-hooks.json"
+}

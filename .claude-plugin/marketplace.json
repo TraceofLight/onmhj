@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "onmhj-local",
+  "description": "Local marketplace for onmhj.",
+  "owner": {
+    "name": "user_name"
+  },
+  "plugins": [
+    {
+      "name": "onmhj",
+      "description": "Record AI-session worklogs locally, then flush daily logs to git.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

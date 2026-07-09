@@ -1,6 +1,6 @@
 # Installation
 
-`onmhj` is installed as a local Codex plugin marketplace. It records hook events locally, then flushes daily raw/report files into a separate git repo chosen by the user.
+`onmhj` is installed as a local Codex or Claude Code plugin marketplace. It records hook events locally, then flushes daily raw/report files into a separate git repo chosen by the user.
 
 ## Prerequisites
 
@@ -46,6 +46,18 @@ If the marketplace was already added and the repo changed, refresh it:
 codex plugin marketplace upgrade onmhj-local
 codex plugin add onmhj@onmhj-local
 ```
+
+## Claude Code From Local Checkout
+
+From any directory:
+
+```sh
+claude plugin marketplace add /path/to/user/Documents/Github/onmhj
+claude plugin install onmhj@onmhj-local
+claude plugin enable onmhj@onmhj-local
+```
+
+Restart Claude Code after installing so the hook settings reload.
 
 ## Configure Report Repo
 
@@ -136,4 +148,8 @@ If the hook cannot find Node, install Node or make sure the non-interactive shel
 
 ## Claude Code
 
-Claude Code support is planned but not packaged yet. Do not claim Claude installation works until the repo includes a `.claude-plugin/plugin.json` or equivalent Claude marketplace manifest.
+The Claude Code plugin manifest lives at:
+
+```txt
+.claude-plugin/plugin.json
+```
