@@ -22,6 +22,22 @@ Korean documentation: [docs/README.ko.md](./docs/README.ko.md)
 - Event timestamps and local event filenames use UTC.
 - `today`/`yesterday` decisions and report dates use the user's local timezone.
 
+## Workflow
+
+1. Install the Codex or Claude Code plugin.
+2. Register one external report repo with `onmhj register`.
+3. Hooks run inside Codex/Claude Code sessions and append redacted local JSONL events only.
+4. Each event records UTC time, local report date, repo path, session id, prompt preview, and `deviceId`.
+5. Optional backfill uses `inject` or `import` to add normalized events to the same local spool.
+6. `flush [date]` loads local events for the configured timezone date.
+7. `flush` pulls the report repo when an upstream exists.
+8. `flush` merges existing raw report events with this device's local events and dedupes them.
+9. `flush` writes `raw/ai-sessions/YYYY-MM-DD.jsonl` and regenerates `daily/YYYY-MM-DD.md`.
+10. Daily markdown follows `reportLanguage`; plugin prompts stay English.
+11. `flush` commits and pushes unless `--no-push` is passed.
+
+Multiple computers can use the same report repo. Give each computer a stable `deviceId`; every flush preserves existing events from other devices and regenerates the combined daily report.
+
 ## Usage
 
 Register:
