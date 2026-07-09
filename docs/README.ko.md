@@ -1,24 +1,50 @@
 # onmhj
 
-`onmhj`는 "오늘뭐했지"를 모듈화한 Codex/Claude Code plugin이다. hook 이벤트를 로컬 JSONL로 쌓고, 등록한 별도 git repo로 하루치 기록을 push한다.
+Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 
-`ejmhj`는 "어제뭐했지"를 모듈화한 리포트 생성 흐름이다.
+`onmhj`는 로컬 AI 코딩 세션 이벤트를 기록하고, 여러 컴퓨터의 기록을 병합한 뒤, git 기반 report repo에 날짜별 작업 로그를 발행한다. "오늘뭐했지" 캡처가 목적이고, `ejmhj`는 이 로그를 소비해 "어제뭐했지" 리포트를 만든다.
 
-## 원칙
+[Installation](./installation.md)
 
-- 기존 wiki repo를 기본값으로 쓰지 않는다.
-- hook 안에서는 로컬 append만 한다.
-- 각 컴퓨터는 hostname 기반 기본 `deviceId`를 가지며 config로 바꿀 수 있다.
-- git sync/push는 명시적으로 `flush`할 때만 한다.
-- `flush`는 report repo를 먼저 pull하고, 기존 raw 로그와 현재 컴퓨터의 local event를 병합/dedupe한 뒤 commit한다.
-- 일반적인 하루 단위 리포트 생성은 활성 Codex/Claude Code auth를 기본값으로 쓴다(`reportAuth=agent`).
-- report markdown 언어는 `reportLanguage`를 따르며, 기본값은 사용자 locale에서 정한다.
-- OpenAI 호환 API 설정은 대량 백필 작업용 선택 경로다.
-- git-history 백필은 설정된 owner identity가 author 또는 committer인 커밋만 포함해야 한다.
-- 프롬프트 저장 기본값은 `preview`다. 필요하면 `full` 또는 `off`로 바꾼다.
-- 저장되는 프롬프트/리포트 입력은 token, password, key류 패턴을 best-effort로 redaction한다.
-- 이벤트 timestamp와 local event 파일명은 UTC 기준이다.
-- `today`/`yesterday` 같은 날짜 판단과 report 날짜는 사용자 컴퓨터 timezone 기준이다.
+## 왜 쓰나
+
+- local-first hook: 세션 이벤트는 git에 바로 쓰지 않고 local JSONL에 append한다.
+- git-backed history: `flush`가 별도 report repo에 raw JSONL과 daily Markdown을 쓴다.
+- multi-device safe: 컴퓨터마다 `deviceId`를 두고, 기존 raw 로그를 pull/merge/dedupe한다.
+- automatic catch-up: background job이 확정되지 않은 날짜를 `confirmedThrough`가 전진할 때까지 재시도한다.
+- agent auth default: 일반 리포트 생성은 Codex/Claude Code의 active auth를 기본값으로 쓴다.
+
+## Quick Start
+
+플러그인 설치 후 report repo를 등록한다:
+
+```sh
+node bin/onmhj.js register /path/to/worklog-git-repo --prompt=preview --timezone=Asia/Seoul
+```
+
+device, owner, report language, auth 정책을 설정한다:
+
+```sh
+node bin/onmhj.js config \
+  --device-id=macbook-pro \
+  --owner-name=TraceofLight \
+  --owner-email=you@example.com \
+  --report-lang=ko \
+  --report-auth=agent
+```
+
+캡처 상태 확인:
+
+```sh
+node bin/onmhj.js status
+```
+
+수동 flush:
+
+```sh
+node bin/onmhj.js flush 2026-07-09
+node bin/onmhj.js flush 2026-07-09 --no-push
+```
 
 ## Workflow
 
@@ -46,100 +72,74 @@ flowchart TD
   P -->|exponential backoff| G
 ```
 
-여러 컴퓨터가 같은 report repo를 써도 된다. 각 컴퓨터에 안정적인 `deviceId`를 두면, flush 때 다른 device의 기존 event를 보존하고 합친 daily report를 다시 만든다. 자동 job은 어제 하루가 아니라 confirmed floor 이후 local event가 있는 모든 날짜를 대상으로 한다. 다른 device가 나중에 더 오래된 `confirmedThrough`를 노출하면 floor를 낮추고 영향 날짜를 다시 queue한다. 실패한 job은 flush가 성공할 때까지 background에서 재시도한다.
+`confirmedThrough`는 날짜 순서대로만 전진한다. 앞 날짜 report가 retry 대기 중이면 뒤 날짜 job은 pending 상태로 둔다. 다른 device가 나중에 더 오래된 `confirmedThrough`를 노출하면 floor를 낮추고 영향 날짜를 다시 queue한다.
 
-`confirmedThrough`는 날짜 순서대로만 전진한다. 앞 날짜 report가 retry 대기 중이면 뒤 날짜 job은 pending 상태로 둔다.
+## Commands
 
-## 사용
+| Command | Purpose |
+| --- | --- |
+| `onmhj register <repo>` | 외부 report repo 설정 |
+| `onmhj config ...` | timezone, device id, owner, language, auth, API 설정 변경 |
+| `onmhj status` | config, local event 수, confirmed floor, job 수 확인 |
+| `onmhj flush [date]` | local/report event 병합, daily Markdown 재생성, commit/push |
+| `onmhj inject --text=...` | 수동 이벤트 1건 추가 |
+| `onmhj import <events.jsonl>` | 정규화된 JSONL bulk import |
+| `onmhj worker` | pending report job 처리 |
 
-등록:
+## Backfill
 
-```sh
-node bin/onmhj.js register /path/to/worklog-git-repo --prompt=preview
-```
-
-timezone 명시:
-
-```sh
-node bin/onmhj.js register /path/to/worklog-git-repo --timezone=Asia/Seoul
-```
-
-상태:
+수동 이벤트:
 
 ```sh
-node bin/onmhj.js status
+node bin/onmhj.js inject \
+  --date=2026-07-08 \
+  --cwd=/path/to/repo \
+  --source=manual \
+  --source-id=manual-2026-07-08-1 \
+  --text="작업 요약"
 ```
 
-prompt 또는 timezone 설정 변경:
-
-```sh
-node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
-```
-
-현재 컴퓨터의 device id 설정:
-
-```sh
-node bin/onmhj.js config --device-id=macbook-pro
-```
-
-owner/report auth 정책 설정:
-
-```sh
-node bin/onmhj.js config --owner-name=TraceofLight --owner-email=you@example.com --report-lang=ko --report-auth=agent
-```
-
-대량 백필용 API 모드:
-
-```sh
-node bin/onmhj.js config --report-auth=api --report-api-base=https://example.com/v1 --report-model=model-name --report-api-key-env=ONMHJ_LLM_API_KEY
-```
-
-수동 이벤트 1건 주입:
-
-```sh
-node bin/onmhj.js inject --date=2026-07-08 --cwd=/path/to/repo --source=manual --source-id=manual-2026-07-08-1 --text="작업 요약"
-```
-
-정규화된 JSONL 이벤트 가져오기:
+Bulk import:
 
 ```sh
 node bin/onmhj.js import /tmp/onmhj-backfill.jsonl
 ```
 
-오늘치 기록 생성, commit, push:
+git-history 백필은 설정된 owner identity가 author 또는 committer인 커밋만 포함해야 한다.
 
-```sh
-node bin/onmhj.js flush
-```
+## Storage
 
-push 없이 확인:
+Local machine:
 
-```sh
-node bin/onmhj.js flush 2026-07-09 --no-push
-```
+- config: `~/.config/onmhj/config.json`
+- events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`
+- internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl`
+- report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
+- local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
+- worker log: `~/.local/state/onmhj/worker.log`
 
-## 설치
+Report repo:
 
-자세한 절차는 [Installation](./installation.md)을 따른다.
+- raw events: `raw/ai-sessions/YYYY-MM-DD.jsonl`
+- daily report: `daily/YYYY-MM-DD.md`
+- device confirmations: `state/devices/DEVICE_ID.json`
 
-에이전트에게 맡길 때는 이렇게 말한다:
+## Safety
+
+- hook은 local append만 한다.
+- git sync/push는 `flush` 또는 worker 기반 report job에서만 실행한다.
+- prompt capture 기본값은 `preview`다. 필요하면 `full` 또는 `off`를 쓴다.
+- prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
+- report local date는 설정 timezone 기준이고, event spool 파일명은 UTC 기준이다.
+
+## Install
+
+[docs/installation.md](./installation.md)를 따른다.
+
+Agent handoff prompt:
 
 ```txt
 Read docs/installation.md and install onmhj for Codex.
 Use /path/to/user/Documents/Github/onmhj-storage as the report repo.
 After installing, run the smoke test and flush one report.
 ```
-
-Claude Code는 로컬 marketplace로 설치할 수 있다.
-
-기록 위치:
-
-- config: `~/.config/onmhj/config.json`
-- local events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl` UTC date
-- internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl` UTC date, prompt excluded
-- report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
-- local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
-- worker log: `~/.local/state/onmhj/worker.log`
-- registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`, report local date 기준 병합본
-- registered repo daily: `daily/YYYY-MM-DD.md` local date, device별/전체 repo 요약 포함
-- registered repo device confirmations: `state/devices/DEVICE_ID.json`

@@ -1,26 +1,50 @@
 # onmhj
 
-`onmhj` packages "what did I do today?" as a Codex and Claude Code plugin. It records hook events to local JSONL, then flushes daily logs to a registered git repo.
+AI-session worklog capture for Codex and Claude Code.
 
-`ejmhj` is the companion "what did I do yesterday?" report flow.
+`onmhj` records local AI coding-session events, merges them across devices, and publishes daily worklogs to a git-backed report repository. It is built for "what did I do today?" capture; `ejmhj` consumes those logs for "what did I do yesterday?" reports.
 
-Korean documentation: [docs/README.ko.md](./docs/README.ko.md)
+[Korean README](./docs/README.ko.md) · [Installation](./docs/installation.md)
 
-## Principles
+## Why
 
-- Do not use an existing wiki repo as the default.
-- Hooks only append local records.
-- Each device gets a stable `deviceId` that defaults to the hostname and can be configured.
-- Git sync and push only happen when `flush` is run explicitly.
-- `flush` pulls the report repo, merges existing raw logs with this device's local events, dedupes, then commits.
-- Normal daily report generation defaults to the active Codex/Claude Code auth (`reportAuth=agent`).
-- Report markdown language follows `reportLanguage`, which defaults from the user's locale.
-- OpenAI-compatible API settings are optional and intended for bulk backfill jobs.
-- Git-history backfills must include only commits authored or committed by the configured owner identity.
-- Prompt capture defaults to `preview`. Use `full` or `off` when needed.
-- Stored prompts and report inputs get best-effort redaction for token, password, and key-like patterns.
-- Event timestamps and local event filenames use UTC.
-- `today`/`yesterday` decisions and report dates use the user's local timezone.
+- Local-first hooks: session events append to local JSONL, not directly to git.
+- Git-backed history: `flush` writes raw JSONL and daily Markdown into a separate report repo.
+- Multi-device safe: each computer has a `deviceId`; existing raw logs are pulled, merged, and deduped.
+- Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.
+- Agent auth by default: daily report generation uses the active Codex/Claude Code auth unless API mode is explicitly enabled.
+
+## Quick Start
+
+Install the plugin, then register the report repo:
+
+```sh
+node bin/onmhj.js register /path/to/worklog-git-repo --prompt=preview --timezone=Asia/Seoul
+```
+
+Set the device, owner, report language, and auth policy:
+
+```sh
+node bin/onmhj.js config \
+  --device-id=macbook-pro \
+  --owner-name=TraceofLight \
+  --owner-email=you@example.com \
+  --report-lang=ko \
+  --report-auth=agent
+```
+
+Check capture status:
+
+```sh
+node bin/onmhj.js status
+```
+
+Manual flush remains available:
+
+```sh
+node bin/onmhj.js flush 2026-07-09
+node bin/onmhj.js flush 2026-07-09 --no-push
+```
 
 ## Workflow
 
@@ -48,100 +72,74 @@ flowchart TD
   P -->|exponential backoff| G
 ```
 
-Multiple computers can use the same report repo. Give each computer a stable `deviceId`; every flush preserves existing events from other devices and regenerates the combined daily report. Automatic jobs cover every local event date after the confirmed floor, not just yesterday. If another device later exposes an older `confirmedThrough`, the floor drops and affected dates get queued again. Failed jobs keep retrying in the background until a flush succeeds.
+`confirmedThrough` advances only in date order. If an earlier report is waiting for retry, later jobs stay pending. If another device later exposes an older `confirmedThrough`, the floor drops and affected dates are queued again.
 
-`confirmedThrough` only advances in date order. If an earlier report is waiting for retry, later report jobs stay pending.
+## Commands
 
-## Usage
+| Command | Purpose |
+| --- | --- |
+| `onmhj register <repo>` | Set the external report repo. |
+| `onmhj config ...` | Update timezone, device id, owner, language, auth, and API settings. |
+| `onmhj status` | Show config, local event count, confirmed floor, and job counts. |
+| `onmhj flush [date]` | Merge local/report events, regenerate daily Markdown, commit, and push. |
+| `onmhj inject --text=...` | Add one normalized manual event. |
+| `onmhj import <events.jsonl>` | Bulk import normalized JSONL events. |
+| `onmhj worker` | Process pending report jobs in the background. |
 
-Register:
+## Backfill
 
-```sh
-node bin/onmhj.js register /path/to/worklog-git-repo --prompt=preview
-```
-
-Set timezone:
-
-```sh
-node bin/onmhj.js register /path/to/worklog-git-repo --timezone=Asia/Seoul
-```
-
-Status:
+Manual event:
 
 ```sh
-node bin/onmhj.js status
+node bin/onmhj.js inject \
+  --date=2026-07-08 \
+  --cwd=/path/to/repo \
+  --source=manual \
+  --source-id=manual-2026-07-08-1 \
+  --text="Work summary"
 ```
 
-Update prompt or timezone config:
-
-```sh
-node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
-```
-
-Set this computer's device id:
-
-```sh
-node bin/onmhj.js config --device-id=macbook-pro
-```
-
-Set owner/report auth policy:
-
-```sh
-node bin/onmhj.js config --owner-name=TraceofLight --owner-email=you@example.com --report-lang=ko --report-auth=agent
-```
-
-Optional API mode for bulk backfill:
-
-```sh
-node bin/onmhj.js config --report-auth=api --report-api-base=https://example.com/v1 --report-model=model-name --report-api-key-env=ONMHJ_LLM_API_KEY
-```
-
-Manually inject one event:
-
-```sh
-node bin/onmhj.js inject --date=2026-07-08 --cwd=/path/to/repo --source=manual --source-id=manual-2026-07-08-1 --text="Work summary"
-```
-
-Import normalized JSONL events:
+Bulk import:
 
 ```sh
 node bin/onmhj.js import /tmp/onmhj-backfill.jsonl
 ```
 
-Flush today's records, commit, and push:
+Git-history backfills must include only commits authored or committed by the configured owner identity.
 
-```sh
-node bin/onmhj.js flush
-```
+## Storage
 
-Flush without pushing:
+Local machine:
 
-```sh
-node bin/onmhj.js flush 2026-07-09 --no-push
-```
+- config: `~/.config/onmhj/config.json`
+- events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`
+- internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl`
+- report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
+- local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
+- worker log: `~/.local/state/onmhj/worker.log`
+
+Report repo:
+
+- raw events: `raw/ai-sessions/YYYY-MM-DD.jsonl`
+- daily report: `daily/YYYY-MM-DD.md`
+- device confirmations: `state/devices/DEVICE_ID.json`
+
+## Safety
+
+- Hooks append locally only.
+- Git sync and push run only during `flush` or worker-driven report jobs.
+- Prompt capture defaults to `preview`; use `full` or `off` as needed.
+- Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
+- Local report dates use the configured timezone; event spool filenames use UTC.
 
 ## Install
 
-Follow [Installation](./docs/installation.md).
+See [docs/installation.md](./docs/installation.md).
 
-Prompt an agent like this:
+Agent handoff prompt:
 
 ```txt
 Read docs/installation.md and install onmhj for Codex.
 Use /path/to/user/Documents/Github/onmhj-storage as the report repo.
 After installing, run the smoke test and flush one report.
 ```
-
-Claude Code can also install from the local marketplace.
-
-Record locations:
-
-- config: `~/.config/onmhj/config.json`
-- local events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl` UTC date
-- internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl` UTC date, prompt excluded
-- report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
-- local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
-- worker log: `~/.local/state/onmhj/worker.log`
-- registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`, merged by local report date
-- registered repo daily: `daily/YYYY-MM-DD.md` local date, with device and combined repository summaries
-- registered repo device confirmations: `state/devices/DEVICE_ID.json`
