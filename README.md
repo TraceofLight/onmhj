@@ -50,6 +50,8 @@ flowchart TD
 
 Multiple computers can use the same report repo. Give each computer a stable `deviceId`; every flush preserves existing events from other devices and regenerates the combined daily report. Automatic jobs cover every local event date after the confirmed floor, not just yesterday. If another device later exposes an older `confirmedThrough`, the floor drops and affected dates get queued again. Failed jobs keep retrying in the background until a flush succeeds.
 
+`confirmedThrough` only advances in date order. If an earlier report is waiting for retry, later report jobs stay pending.
+
 ## Usage
 
 Register:

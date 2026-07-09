@@ -48,6 +48,8 @@ flowchart TD
 
 여러 컴퓨터가 같은 report repo를 써도 된다. 각 컴퓨터에 안정적인 `deviceId`를 두면, flush 때 다른 device의 기존 event를 보존하고 합친 daily report를 다시 만든다. 자동 job은 어제 하루가 아니라 confirmed floor 이후 local event가 있는 모든 날짜를 대상으로 한다. 다른 device가 나중에 더 오래된 `confirmedThrough`를 노출하면 floor를 낮추고 영향 날짜를 다시 queue한다. 실패한 job은 flush가 성공할 때까지 background에서 재시도한다.
 
+`confirmedThrough`는 날짜 순서대로만 전진한다. 앞 날짜 report가 retry 대기 중이면 뒤 날짜 job은 pending 상태로 둔다.
+
 ## 사용
 
 등록:

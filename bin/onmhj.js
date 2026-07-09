@@ -7,6 +7,7 @@ const childProcess = require('child_process');
 const CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
 const DEFAULT_REPORT_API_KEY_ENV = 'ONMHJ_LLM_API_KEY';
+const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 
 function usage() {
   return [
@@ -585,7 +586,8 @@ function pidAlive(pid) {
 function acquireLock(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const existing = readJson(file, null);
-  if (existing && existing.pid && !pidAlive(existing.pid)) {
+  const stale = existing && existing.ts && Date.now() - Date.parse(existing.ts) > LOCK_STALE_MS;
+  if (existing && (stale || (existing.pid && !pidAlive(existing.pid)))) {
     try { fs.unlinkSync(file); } catch {}
   }
   try {
@@ -629,6 +631,8 @@ function confirmedFloor(cfg) {
 
 function tryScheduleReportJobs(cfg, now = new Date(), opts = {}) {
   const throughDate = previousLocalDateKey(now, cfg.timeZone);
+  // The floor is intentionally the minimum across devices; a late device can
+  // lower it so merged reports are regenerated from the earliest uncertain day.
   const floor = confirmedFloor(cfg);
   let count = 0;
   for (const date of localEventDates(cfg, throughDate)) {
@@ -645,6 +649,7 @@ function tryScheduleReportJobs(cfg, now = new Date(), opts = {}) {
     });
   }
   if (!count) return false;
+  writeInternalLog(cfg, 'report_job_scan', { confirmedFloor: floor, throughDate, queued: count });
   if (opts.spawn !== false) spawnWorker(cfg);
   return true;
 }
@@ -808,6 +813,7 @@ function flush(date, opts) {
   run('git', ['add', rawTarget, dailyTarget, ...(confirmTarget ? [confirmTarget] : [])], cfg.repoPath);
   const diff = run('git', ['diff', '--cached', '--quiet'], cfg.repoPath, true);
   if (diff.status === 0) {
+    if (!opts.noPush) run('git', ['push'], cfg.repoPath);
     writeInternalLog(cfg, 'flush_no_changes', {
       date: key,
       eventCount: merged.length,
@@ -815,6 +821,7 @@ function flush(date, opts) {
       deviceId: cfg.deviceId,
       confirmed: Boolean(opts.confirm),
       pulled,
+      pushed: !opts.noPush,
     });
     process.stdout.write(`no git changes for ${key}\n`);
     return;
@@ -890,24 +897,22 @@ function processReportJobs(cfg) {
   }
   tryScheduleReportJobs(cfg, new Date(), { spawn: false });
   const now = Date.now();
-  let nextDelay = 0;
+  // Confirmed dates must advance contiguously. Stop at the first incomplete
+  // date so a later success cannot hide an earlier failed report.
   for (const job of listReportJobs(cfg)) {
     if (job.status === 'completed') continue;
     const due = Date.parse(job.nextAttemptAt || job.createdAt || new Date().toISOString());
     if (!Number.isNaN(due) && due > now) {
-      const wait = due - now;
-      nextDelay = nextDelay ? Math.min(nextDelay, wait) : wait;
-      continue;
+      break;
     }
-    runReportJob(cfg, job.date);
+    if (!runReportJob(cfg, job.date)) break;
   }
   for (const job of listReportJobs(cfg)) {
     if (job.status === 'completed') continue;
     const due = Date.parse(job.nextAttemptAt || new Date().toISOString());
-    const wait = Number.isNaN(due) ? 0 : Math.max(0, due - Date.now());
-    nextDelay = nextDelay ? Math.min(nextDelay, wait) : wait;
+    return Number.isNaN(due) ? 0 : Math.max(0, due - Date.now());
   }
-  return nextDelay;
+  return 0;
 }
 
 function worker() {
@@ -917,6 +922,7 @@ function worker() {
     writeInternalLog(cfg, 'worker_already_running');
     return;
   }
+  writeInternalLog(cfg, 'worker_start');
   const tick = () => {
     const nextDelay = processReportJobs(cfg);
     if (nextDelay) {
@@ -1035,6 +1041,17 @@ function selftest() {
   tryScheduleReportJobs(config(), new Date('2026-07-11T00:00:00.000Z'), { spawn: false });
   if (readReportJob(config(), '2026-07-09').status !== 'pending') {
     throw new Error('lower remote confirmation did not requeue completed report');
+  }
+  writeReportJob(config(), {
+    ...readReportJob(config(), '2026-07-09'),
+    status: 'failed',
+    nextAttemptAt: '2999-01-01T00:00:00.000Z',
+  });
+  const blockedDelay = processReportJobs(config());
+  const blockedNextJob = readReportJob(config(), '2026-07-10');
+  if (blockedDelay <= 0) throw new Error('worker did not wait for earliest retry');
+  if (!blockedNextJob || blockedNextJob.status !== 'pending' || blockedNextJob.attempts !== 1) {
+    throw new Error('later report ran before earlier retry was due');
   }
   const hookRun = childProcess.spawnSync(process.execPath, [__filename, 'hook', 'UserPromptSubmit'], {
     env: { ...process.env, ONMHJ_CONFIG: CONFIG_PATH },
