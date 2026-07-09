@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const childProcess = require('child_process');
 
-const CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
+let CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
 const DEFAULT_REPORT_API_KEY_ENV = 'ONMHJ_LLM_API_KEY';
 const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
@@ -971,6 +971,9 @@ function status() {
 
 function selftest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-'));
+  const originalConfigPath = CONFIG_PATH;
+  CONFIG_PATH = path.join(tmp, 'config.json');
+  try {
   const repo = path.join(tmp, 'repo');
   const state = path.join(tmp, 'state');
   fs.mkdirSync(repo);
@@ -1104,6 +1107,9 @@ function selftest() {
   if (!afterImport.includes('"sourceId":"selftest-import"')) throw new Error('manual import missing');
   if (afterImport.includes('redaction-import-fixture')) throw new Error('manual import redaction failed');
   process.stdout.write('selftest ok\n');
+  } finally {
+    CONFIG_PATH = originalConfigPath;
+  }
 }
 
 function main() {

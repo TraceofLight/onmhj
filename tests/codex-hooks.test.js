@@ -50,3 +50,25 @@ test('Codex Windows hook commands run in PowerShell', { skip: process.platform !
     }
   }
 });
+
+test('selftest does not overwrite selected user config', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-selftest-'));
+  const configPath = path.join(tmp, 'config.json');
+  const userConfig = {
+    repoPath: path.join(tmp, 'user-repo'),
+    stateDir: path.join(tmp, 'user-state'),
+    promptMode: 'preview',
+    timeZone: 'Asia/Seoul',
+    deviceId: 'user-device',
+  };
+  fs.writeFileSync(configPath, JSON.stringify(userConfig, null, 2) + '\n');
+
+  const result = childProcess.spawnSync(process.execPath, [path.join(root, 'bin', 'onmhj.js'), 'selftest'], {
+    cwd: root,
+    env: { ...process.env, ONMHJ_CONFIG: configPath },
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), userConfig);
+});
