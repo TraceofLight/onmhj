@@ -1,6 +1,6 @@
 {
   "name": "onmhj",
-  "version": "0.1.11+codex.20260709160109",
+  "version": "0.1.11+codex.20260709163446",
   "description": "Local AI-session worklog capture with ordered confirmed-date retries.",
   "author": {
     "name": "onmhj maintainers"
