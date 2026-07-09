@@ -79,6 +79,12 @@ Update prompt or timezone without changing the registered repo:
 node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
 ```
 
+Set a stable device id for this computer. It defaults to the hostname when unset:
+
+```sh
+node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --device-id=macbook-pro
+```
+
 Set the owner identity used by manual/git-history backfills:
 
 ```sh
@@ -144,6 +150,8 @@ Imported events go to `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`; run `flush
 
 When importing git history, prefilter commits to the configured owner identity. Include only commits where author or committer matches the configured owner name or email. This prevents team repo history from being reported as the user's own work.
 
+Each imported event gets the configured `deviceId` unless the JSONL already includes one.
+
 ## Privacy
 
 `onmhj` redacts common token, password, secret, API key, bearer token, and private-key patterns before writing prompt text to local events or report repos.
@@ -179,6 +187,8 @@ Flush to the report repo:
 ```sh
 node /path/to/user/Documents/Github/onmhj/bin/onmhj.js flush
 ```
+
+Before writing, `flush` pulls the report repo when an upstream exists, merges the existing `raw/ai-sessions/YYYY-MM-DD.jsonl` with this device's local events, dedupes them, and regenerates the daily markdown. This lets multiple computers append to the same report repo date without overwriting each other.
 
 Expected outputs in the report repo:
 

@@ -8,7 +8,9 @@
 
 - 기존 wiki repo를 기본값으로 쓰지 않는다.
 - hook 안에서는 로컬 append만 한다.
+- 각 컴퓨터는 hostname 기반 기본 `deviceId`를 가지며 config로 바꿀 수 있다.
 - git sync/push는 명시적으로 `flush`할 때만 한다.
+- `flush`는 report repo를 먼저 pull하고, 기존 raw 로그와 현재 컴퓨터의 local event를 병합/dedupe한 뒤 commit한다.
 - 일반적인 하루 단위 리포트 생성은 활성 Codex/Claude Code auth를 기본값으로 쓴다(`reportAuth=agent`).
 - OpenAI 호환 API 설정은 대량 백필 작업용 선택 경로다.
 - git-history 백필은 설정된 owner identity가 author 또는 committer인 커밋만 포함해야 한다.
@@ -41,6 +43,12 @@ prompt 또는 timezone 설정 변경:
 
 ```sh
 node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
+```
+
+현재 컴퓨터의 device id 설정:
+
+```sh
+node bin/onmhj.js config --device-id=macbook-pro
 ```
 
 owner/report auth 정책 설정:
@@ -98,5 +106,5 @@ Claude Code는 로컬 marketplace로 설치할 수 있다.
 - config: `~/.config/onmhj/config.json`
 - local events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl` UTC date
 - internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl` UTC date, prompt excluded
-- registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`
-- registered repo daily: `daily/YYYY-MM-DD.md` local date
+- registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`, report local date 기준 병합본
+- registered repo daily: `daily/YYYY-MM-DD.md` local date, device별/전체 repo 요약 포함

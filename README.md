@@ -10,7 +10,9 @@ Korean documentation: [docs/README.ko.md](./docs/README.ko.md)
 
 - Do not use an existing wiki repo as the default.
 - Hooks only append local records.
+- Each device gets a stable `deviceId` that defaults to the hostname and can be configured.
 - Git sync and push only happen when `flush` is run explicitly.
+- `flush` pulls the report repo, merges existing raw logs with this device's local events, dedupes, then commits.
 - Normal daily report generation defaults to the active Codex/Claude Code auth (`reportAuth=agent`).
 - OpenAI-compatible API settings are optional and intended for bulk backfill jobs.
 - Git-history backfills must include only commits authored or committed by the configured owner identity.
@@ -43,6 +45,12 @@ Update prompt or timezone config:
 
 ```sh
 node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
+```
+
+Set this computer's device id:
+
+```sh
+node bin/onmhj.js config --device-id=macbook-pro
 ```
 
 Set owner/report auth policy:
@@ -100,5 +108,5 @@ Record locations:
 - config: `~/.config/onmhj/config.json`
 - local events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl` UTC date
 - internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl` UTC date, prompt excluded
-- registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`
-- registered repo daily: `daily/YYYY-MM-DD.md` local date
+- registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`, merged by local report date
+- registered repo daily: `daily/YYYY-MM-DD.md` local date, with device and combined repository summaries

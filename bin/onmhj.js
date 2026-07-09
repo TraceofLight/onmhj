@@ -12,8 +12,8 @@ function usage() {
   return [
     'Usage:',
     '  onmhj hook <event>',
-    '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City] [--owner-name=NAME] [--owner-email=EMAIL] [--report-auth=agent|api]',
-    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City] [--owner-name=NAME] [--owner-email=EMAIL] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
+    '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--report-auth=agent|api]',
+    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
@@ -42,6 +42,7 @@ function config() {
     repoPath: cfg.repoPath || '',
     promptMode: cfg.promptMode || 'preview',
     timeZone: normalizeTimeZone(cfg.timeZone),
+    deviceId: cfg.deviceId || defaultDeviceId(),
     ownerName: cfg.ownerName || globalGitConfig('user.name') || os.userInfo().username,
     ownerEmail: cfg.ownerEmail || globalGitConfig('user.email') || '',
     reportAuth: cfg.reportAuth || 'agent',
@@ -49,6 +50,13 @@ function config() {
     reportApiModel: cfg.reportApiModel || '',
     reportApiKeyEnv: cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV,
   };
+}
+
+function defaultDeviceId() {
+  return String(os.hostname() || os.userInfo().username || 'unknown')
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'unknown';
 }
 
 function systemTimeZone() {
@@ -192,6 +200,7 @@ function hook(event) {
       timeZone: cfg.timeZone,
       localDate: localDateKey(now, cfg.timeZone),
       event,
+      deviceId: cfg.deviceId,
       cwd,
       gitRoot,
       gitBranch: gitRoot ? gitValue(['branch', '--show-current'], gitRoot) : '',
@@ -233,6 +242,7 @@ function parseOptions(args) {
   for (const arg of args) {
     if (arg.startsWith('--prompt=')) opts.promptMode = arg.slice('--prompt='.length);
     if (arg.startsWith('--timezone=')) opts.timeZone = arg.slice('--timezone='.length);
+    if (arg.startsWith('--device-id=')) opts.deviceId = arg.slice('--device-id='.length);
     if (arg.startsWith('--owner-name=')) opts.ownerName = arg.slice('--owner-name='.length);
     if (arg.startsWith('--owner-email=')) opts.ownerEmail = arg.slice('--owner-email='.length);
     if (arg.startsWith('--report-auth=')) opts.reportAuth = arg.slice('--report-auth='.length);
@@ -263,6 +273,7 @@ function register(repoPath, opts) {
   cfg.repoPath = resolved;
   if (opts.promptMode) cfg.promptMode = opts.promptMode;
   if (opts.timeZone) cfg.timeZone = opts.timeZone;
+  applyDeviceConfig(cfg, opts);
   applyOwnerConfig(cfg, opts);
   applyReportConfig(cfg, opts);
   writeJson(CONFIG_PATH, cfg);
@@ -270,6 +281,7 @@ function register(repoPath, opts) {
     repoPath: resolved,
     promptMode: cfg.promptMode,
     timeZone: cfg.timeZone,
+    deviceId: cfg.deviceId,
     ownerName: cfg.ownerName,
     ownerEmail: cfg.ownerEmail,
     reportAuth: cfg.reportAuth,
@@ -282,6 +294,9 @@ function validateConfigOptions(opts) {
     throw new Error('prompt mode must be preview, full, or off');
   }
   if (opts.timeZone) localDateKey(new Date(), opts.timeZone);
+  if (opts.deviceId && !/^[A-Za-z0-9_.-]+$/.test(opts.deviceId)) {
+    throw new Error('device id must contain only letters, numbers, dot, underscore, or dash');
+  }
   if (opts.reportAuth && !['agent', 'api'].includes(opts.reportAuth)) {
     throw new Error('report auth must be agent or api');
   }
@@ -292,6 +307,10 @@ function validateConfigOptions(opts) {
     if (opts[key] && /[\r\n]/.test(opts[key])) throw new Error(`${key} must be a single line`);
   }
   if (opts.reportApiBaseUrl) new URL(opts.reportApiBaseUrl);
+}
+
+function applyDeviceConfig(cfg, opts) {
+  if (opts.deviceId) cfg.deviceId = opts.deviceId;
 }
 
 function applyOwnerConfig(cfg, opts) {
@@ -324,28 +343,38 @@ function reportRuntime(cfg) {
 
 function configure(opts) {
   validateConfigOptions(opts);
-  if (!opts.promptMode && !opts.timeZone && !opts.ownerName && !opts.ownerEmail && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
+  if (!opts.promptMode && !opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
     throw new Error(usage());
   }
   const cfg = config();
   if (opts.promptMode) cfg.promptMode = opts.promptMode;
   if (opts.timeZone) cfg.timeZone = opts.timeZone;
+  applyDeviceConfig(cfg, opts);
   applyOwnerConfig(cfg, opts);
   applyReportConfig(cfg, opts);
   writeJson(CONFIG_PATH, cfg);
   writeInternalLog(cfg, 'config', {
     promptMode: cfg.promptMode,
     timeZone: cfg.timeZone,
+    deviceId: cfg.deviceId,
     ownerName: cfg.ownerName,
     ownerEmail: cfg.ownerEmail,
     reportAuth: cfg.reportAuth,
   });
-  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone} reportAuth=${cfg.reportAuth}\n`);
+  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} reportAuth=${cfg.reportAuth}\n`);
 }
 
 function eventDedupeKey(event) {
   if (event.sourceId) return `sourceId:${event.sourceId}`;
-  return '';
+  return [
+    'event',
+    event.tsUtc || event.ts || '',
+    event.event || '',
+    event.sessionId || '',
+    event.deviceId || '',
+    event.cwd || '',
+    event.prompt || event.promptPreview || '',
+  ].join(':');
 }
 
 function appendEventRecord(cfg, event) {
@@ -368,6 +397,7 @@ function normalizeImportedEvent(raw, cfg) {
     timeZone: raw.timeZone || cfg.timeZone,
     localDate: raw.localDate || localDateKey(date, raw.timeZone || cfg.timeZone),
     event: raw.event || 'ManualImport',
+    deviceId: raw.deviceId || cfg.deviceId,
     cwd,
     gitRoot,
     gitBranch: raw.gitBranch || (gitRoot ? gitValue(['branch', '--show-current'], gitRoot) : ''),
@@ -428,6 +458,19 @@ function loadEvents(file) {
   }
 }
 
+function mergeEvents(...groups) {
+  const seen = new Set();
+  const merged = [];
+  for (const event of groups.flat()) {
+    const clean = sanitizeEvent(event);
+    const key = eventDedupeKey(clean);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    merged.push(clean);
+  }
+  return merged.sort((a, b) => String(a.tsUtc || a.ts).localeCompare(String(b.tsUtc || b.ts)));
+}
+
 function loadEventsForLocalDate(cfg, date) {
   const dir = path.join(cfg.stateDir, 'events');
   let files = [];
@@ -447,7 +490,11 @@ function loadEventsForLocalDate(cfg, date) {
 
 function summarize(events, date) {
   const byRepo = new Map();
+  const byDevice = new Map();
   for (const event of events) {
+    const device = event.deviceId || 'unknown';
+    byDevice.set(device, (byDevice.get(device) || 0) + 1);
+
     const key = event.gitRoot || event.cwd || '(unknown)';
     const row = byRepo.get(key) || { count: 0, prompts: [] };
     row.count += 1;
@@ -464,9 +511,17 @@ function summarize(events, date) {
     '',
     `Events: ${events.length}`,
     '',
-    '## Repositories',
+    '## Devices',
     '',
   ];
+  for (const [device, count] of byDevice.entries()) {
+    lines.push(`- ${device}: ${count}`);
+  }
+  lines.push(
+    '',
+    '## Repositories',
+    '',
+  );
   for (const [repo, row] of byRepo.entries()) {
     lines.push(`### ${repo}`, '', `Events: ${row.count}`, '');
     if (row.prompts.length) {
@@ -477,6 +532,13 @@ function summarize(events, date) {
     }
   }
   return lines.join('\n').replace(/\n+$/, '\n');
+}
+
+function syncReportRepo(repoPath) {
+  const upstream = gitValue(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], repoPath);
+  if (!upstream) return false;
+  run('git', ['pull', '--rebase', '--autostash'], repoPath);
+  return true;
 }
 
 function flush(date, opts) {
@@ -492,17 +554,25 @@ function flush(date, opts) {
     return;
   }
 
+  const pulled = syncReportRepo(cfg.repoPath);
   const rawTarget = path.join(cfg.repoPath, 'raw', 'ai-sessions', key + '.jsonl');
   const dailyTarget = path.join(cfg.repoPath, 'daily', key + '.md');
   fs.mkdirSync(path.dirname(rawTarget), { recursive: true });
   fs.mkdirSync(path.dirname(dailyTarget), { recursive: true });
-  fs.writeFileSync(rawTarget, events.map(event => JSON.stringify(event)).join('\n') + '\n');
-  fs.writeFileSync(dailyTarget, summarize(events, key));
+  const merged = mergeEvents(loadEvents(rawTarget), events);
+  fs.writeFileSync(rawTarget, merged.map(event => JSON.stringify(event)).join('\n') + '\n');
+  fs.writeFileSync(dailyTarget, summarize(merged, key));
 
   run('git', ['add', rawTarget, dailyTarget], cfg.repoPath);
   const diff = run('git', ['diff', '--cached', '--quiet'], cfg.repoPath, true);
   if (diff.status === 0) {
-    writeInternalLog(cfg, 'flush_no_changes', { date: key, eventCount: events.length });
+    writeInternalLog(cfg, 'flush_no_changes', {
+      date: key,
+      eventCount: merged.length,
+      localEventCount: events.length,
+      deviceId: cfg.deviceId,
+      pulled,
+    });
     process.stdout.write(`no git changes for ${key}\n`);
     return;
   }
@@ -510,9 +580,12 @@ function flush(date, opts) {
   if (!opts.noPush) run('git', ['push'], cfg.repoPath);
   writeInternalLog(cfg, 'flush', {
     date: key,
-    eventCount: events.length,
+    eventCount: merged.length,
+    localEventCount: events.length,
+    deviceId: cfg.deviceId,
     rawTarget,
     dailyTarget,
+    pulled,
     pushed: !opts.noPush,
   });
   process.stdout.write(`flushed ${key}\n`);
@@ -531,6 +604,7 @@ function status() {
     `repo: ${cfg.repoPath || '(not registered)'}`,
     `prompt: ${cfg.promptMode}`,
     `timeZone: ${cfg.timeZone}`,
+    `deviceId: ${cfg.deviceId}`,
     `ownerName: ${cfg.ownerName}`,
     `ownerEmail: ${cfg.ownerEmail || '(unset)'}`,
     `reportAuth: ${report.auth}`,
@@ -550,6 +624,19 @@ function selftest() {
   run('git', ['config', 'user.email', 'onmhj@example.local'], repo);
   run('git', ['config', 'user.name', 'onmhj'], repo);
   writeJson(CONFIG_PATH, { repoPath: repo, stateDir: state, promptMode: 'preview', timeZone: 'Asia/Seoul' });
+  const existingRaw = path.join(repo, 'raw', 'ai-sessions', '2026-07-09.jsonl');
+  fs.mkdirSync(path.dirname(existingRaw), { recursive: true });
+  fs.writeFileSync(existingRaw, JSON.stringify({
+    ts: '2026-07-09T00:30:00.000Z',
+    tsUtc: '2026-07-09T00:30:00.000Z',
+    timeZone: 'Asia/Seoul',
+    localDate: '2026-07-09',
+    event: 'UserPromptSubmit',
+    deviceId: 'other-device',
+    cwd: repo,
+    gitRoot: repo,
+    promptPreview: 'other device work',
+  }) + '\n');
   appendLine(eventFile(config(), '2026-07-08'), JSON.stringify({
     ts: '2026-07-08T15:00:00.000Z',
     tsUtc: '2026-07-08T15:00:00.000Z',
@@ -564,6 +651,8 @@ function selftest() {
   const daily = fs.readFileSync(path.join(repo, 'daily', '2026-07-09.md'), 'utf8');
   const raw = fs.readFileSync(path.join(repo, 'raw', 'ai-sessions', '2026-07-09.jsonl'), 'utf8');
   if (!daily) throw new Error('daily file missing');
+  if (!daily.includes('## Devices')) throw new Error('device summary missing');
+  if (!raw.includes('"deviceId":"other-device"')) throw new Error('existing raw event was not preserved');
   if (daily.includes('redaction-fixture-value') || raw.includes('[REDACTION_FIXTURE]')) {
     throw new Error('secret redaction failed');
   }
@@ -579,6 +668,8 @@ function selftest() {
   configure({ timeZone: 'UTC', promptMode: 'off' });
   const updated = config();
   if (updated.timeZone !== 'UTC' || updated.promptMode !== 'off') throw new Error('config update failed');
+  configure({ deviceId: 'test-device' });
+  if (config().deviceId !== 'test-device') throw new Error('device config failed');
   configure({ ownerName: 'onmhj-owner', ownerEmail: 'owner@example.local' });
   const ownerCfg = config();
   if (ownerCfg.ownerName !== 'onmhj-owner' || ownerCfg.ownerEmail !== 'owner@example.local') {
