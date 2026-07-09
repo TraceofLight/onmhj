@@ -73,6 +73,24 @@ Events spool locally at:
 ~/.local/state/onmhj/events/YYYY-MM-DD.jsonl
 ```
 
+Internal operational logs are stored separately and do not include prompt text:
+
+```txt
+~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl
+```
+
+## Privacy
+
+`onmhj` redacts common token, password, secret, API key, bearer token, and private-key patterns before writing prompt text to local events or report repos.
+
+This is a best-effort guard, not a full secret scanner. Keep `--prompt=preview` as the default. Use `--prompt=off` when working with credentials-heavy sessions.
+
+When asking an agent to summarize or flush reports, include this instruction:
+
+```txt
+Before writing to the onmhj report repo, exclude or redact tokens, API keys, passwords, private keys, bearer credentials, cookies, and one-off secret values. Keep only the work reason, process, decisions, and results.
+```
+
 ## Smoke Test
 
 Run a short Codex session in a target repo:

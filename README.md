@@ -8,6 +8,7 @@
 - hook 안에서는 로컬 append만 한다.
 - git sync/push는 명시적으로 `flush`할 때만 한다.
 - 프롬프트 저장 기본값은 `preview`다. 필요하면 `full` 또는 `off`로 바꾼다.
+- 저장되는 프롬프트/리포트 입력은 token, password, key류 패턴을 best-effort로 redaction한다.
 - 이벤트 timestamp와 local event 파일명은 UTC 기준이다.
 - `today`/`yesterday` 같은 날짜 판단과 report 날짜는 사용자 컴퓨터 timezone 기준이다.
 
@@ -61,5 +62,6 @@ Claude Code 지원은 아직 패키징 전이다. 설치됐다고 말하려면 `
 
 - config: `~/.config/onmhj/config.json`
 - local events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl` UTC date
+- internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl` UTC date, prompt excluded
 - registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`
 - registered repo daily: `daily/YYYY-MM-DD.md` local date

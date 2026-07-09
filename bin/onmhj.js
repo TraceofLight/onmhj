@@ -74,9 +74,26 @@ function eventFile(cfg, date = utcDateKey()) {
   return path.join(cfg.stateDir, 'events', date + '.jsonl');
 }
 
+function internalLogFile(cfg, date = utcDateKey()) {
+  return path.join(cfg.stateDir, 'internal', date + '.jsonl');
+}
+
 function appendLine(file, line) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, line.replace(/\n$/, '') + '\n', { mode: 0o600 });
+}
+
+function writeInternalLog(cfg, action, data = {}) {
+  const now = new Date();
+  try {
+    appendLine(internalLogFile(cfg, utcDateKey(now)), JSON.stringify({
+      ts: now.toISOString(),
+      action,
+      ...data,
+    }));
+  } catch {
+    // Internal logs are best-effort and must never break hooks.
+  }
 }
 
 function readStdin() {
@@ -112,8 +129,23 @@ function parsePrompt(input, mode) {
   if (mode === 'off') return {};
   const prompt = String(input.prompt || '');
   if (!prompt) return {};
-  if (mode === 'full') return { prompt };
-  return { promptPreview: prompt.slice(0, 300) };
+  if (mode === 'full') return { prompt: redactSecrets(prompt) };
+  return { promptPreview: redactSecrets(prompt).slice(0, 300) };
+}
+
+function redactSecrets(value) {
+  return String(value)
+    .replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [REDACTED]')
+    .replace(/\b(sk-[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|glpat-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}|SG\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{16})\b/g, '[REDACTED_TOKEN]')
+    .replace(/\b(api[_-]?key|token|secret|password|passwd|pwd|access[_-]?token|refresh[_-]?token|private[_-]?key)\b(\s*[:=]\s*)(['"]?)[^\s'"`,;]+/gi, (_match, key, sep, quote) => `${key}${sep}${quote}[REDACTED]`);
+}
+
+function sanitizeEvent(event) {
+  const clean = { ...event };
+  if (clean.prompt) clean.prompt = redactSecrets(clean.prompt);
+  if (clean.promptPreview) clean.promptPreview = redactSecrets(clean.promptPreview);
+  return clean;
 }
 
 function hook(event) {
@@ -137,6 +169,13 @@ function hook(event) {
     ...parsePrompt(input, cfg.promptMode),
   };
   appendLine(eventFile(cfg, utcDateKey(now)), JSON.stringify(record));
+  writeInternalLog(cfg, 'hook', {
+    event,
+    cwd,
+    gitRoot,
+    localDate: record.localDate,
+    sessionId: record.sessionId,
+  });
 }
 
 function readJsonFromString(raw, fallback) {
@@ -171,6 +210,11 @@ function register(repoPath, opts) {
   if (opts.promptMode) cfg.promptMode = opts.promptMode;
   if (opts.timeZone) cfg.timeZone = opts.timeZone;
   writeJson(CONFIG_PATH, cfg);
+  writeInternalLog(cfg, 'register', {
+    repoPath: resolved,
+    promptMode: cfg.promptMode,
+    timeZone: cfg.timeZone,
+  });
   process.stdout.write(`registered ${resolved}\n`);
 }
 
@@ -199,6 +243,7 @@ function loadEventsForLocalDate(cfg, date) {
   return files
     .flatMap(loadEvents)
     .filter(event => event.localDate === date || (!event.localDate && utcDateKey(new Date(event.ts)) === date))
+    .map(sanitizeEvent)
     .sort((a, b) => String(a.tsUtc || a.ts).localeCompare(String(b.tsUtc || b.ts)));
 }
 
@@ -244,6 +289,7 @@ function flush(date, opts) {
   const key = date || localDateKey(new Date(), cfg.timeZone);
   const events = loadEventsForLocalDate(cfg, key);
   if (!events.length) {
+    writeInternalLog(cfg, 'flush_no_events', { date: key });
     process.stdout.write(`no events for ${key}\n`);
     return;
   }
@@ -258,11 +304,19 @@ function flush(date, opts) {
   run('git', ['add', rawTarget, dailyTarget], cfg.repoPath);
   const diff = run('git', ['diff', '--cached', '--quiet'], cfg.repoPath, true);
   if (diff.status === 0) {
+    writeInternalLog(cfg, 'flush_no_changes', { date: key, eventCount: events.length });
     process.stdout.write(`no git changes for ${key}\n`);
     return;
   }
   run('git', ['commit', '-m', `log: ${key} AI worklog`], cfg.repoPath);
   if (!opts.noPush) run('git', ['push'], cfg.repoPath);
+  writeInternalLog(cfg, 'flush', {
+    date: key,
+    eventCount: events.length,
+    rawTarget,
+    dailyTarget,
+    pushed: !opts.noPush,
+  });
   process.stdout.write(`flushed ${key}\n`);
 }
 
@@ -297,10 +351,16 @@ function selftest() {
     event: 'UserPromptSubmit',
     cwd: repo,
     gitRoot: repo,
-    promptPreview: '테스트 작업',
+    promptPreview: '테스트 작업 token=redaction-fixture-value [REDACTION_FIXTURE]',
   }));
   flush('2026-07-09', { noPush: true });
-  if (!fs.existsSync(path.join(repo, 'daily', '2026-07-09.md'))) throw new Error('daily file missing');
+  const daily = fs.readFileSync(path.join(repo, 'daily', '2026-07-09.md'), 'utf8');
+  const raw = fs.readFileSync(path.join(repo, 'raw', 'ai-sessions', '2026-07-09.jsonl'), 'utf8');
+  if (!daily) throw new Error('daily file missing');
+  if (daily.includes('redaction-fixture-value') || raw.includes('[REDACTION_FIXTURE]')) {
+    throw new Error('secret redaction failed');
+  }
+  if (!fs.existsSync(internalLogFile(config(), '2026-07-09'))) throw new Error('internal log missing');
   process.stdout.write('selftest ok\n');
 }
 
@@ -318,6 +378,12 @@ function main() {
 try {
   main();
 } catch (err) {
+  try {
+    writeInternalLog(config(), 'error', {
+      command: process.argv.slice(2).join(' '),
+      message: err && err.message ? err.message : String(err),
+    });
+  } catch {}
   process.stderr.write((err && err.message ? err.message : String(err)) + '\n');
   process.exit(1);
 }
