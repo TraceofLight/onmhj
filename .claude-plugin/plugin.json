@@ -1,7 +1,7 @@
 {
   "name": "onmhj",
-  "version": "0.1.8",
-  "description": "Local AI-session worklog capture with auto-retrying daily reports.",
+  "version": "0.1.9",
+  "description": "Local AI-session worklog capture with confirmed-date report retries.",
   "author": {
     "name": "user_name"
   },

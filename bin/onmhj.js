@@ -230,9 +230,7 @@ function hook(event) {
       localDate: record.localDate,
       sessionId: record.sessionId,
     });
-    if (event === 'SessionStart') {
-      tryScheduleYesterdayReport(cfg, now);
-    }
+    if (event === 'SessionStart') tryScheduleReportJobs(cfg, now);
   } catch (err) {
     writeInternalLog(cfg, 'hook_error', {
       event,
@@ -475,6 +473,18 @@ function reportJobsDir(cfg) {
   return path.join(cfg.stateDir, 'jobs', 'reports');
 }
 
+function localConfirmationFile(cfg) {
+  return path.join(reportJobsDir(cfg), 'confirmed.json');
+}
+
+function deviceConfirmationDir(cfg) {
+  return path.join(cfg.repoPath, 'state', 'devices');
+}
+
+function deviceConfirmationFile(cfg, deviceId = cfg.deviceId) {
+  return path.join(deviceConfirmationDir(cfg), deviceId + '.json');
+}
+
 function reportJobFile(cfg, date) {
   return path.join(reportJobsDir(cfg), date + '.json');
 }
@@ -493,6 +503,62 @@ function readReportJob(cfg, date) {
 
 function writeReportJob(cfg, job) {
   writeJson(reportJobFile(cfg, job.date), job);
+}
+
+function readLocalConfirmation(cfg) {
+  return readJson(localConfirmationFile(cfg), {});
+}
+
+function writeLocalConfirmation(cfg, confirmedThrough) {
+  writeJson(localConfirmationFile(cfg), {
+    deviceId: cfg.deviceId,
+    confirmedThrough,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+function readDeviceConfirmations(cfg) {
+  try {
+    return fs.readdirSync(deviceConfirmationDir(cfg))
+      .filter(file => file.endsWith('.json'))
+      .map(file => readJson(path.join(deviceConfirmationDir(cfg), file), null))
+      .filter(item => item && item.confirmedThrough);
+  } catch {
+    return [];
+  }
+}
+
+function writeDeviceConfirmation(cfg, confirmedThrough) {
+  const target = deviceConfirmationFile(cfg);
+  writeJson(target, {
+    deviceId: cfg.deviceId,
+    confirmedThrough,
+    updatedAt: new Date().toISOString(),
+    timeZone: cfg.timeZone,
+  });
+  return target;
+}
+
+function minDateKey(values) {
+  return values.filter(Boolean).sort()[0] || '';
+}
+
+function localEventDates(cfg, throughDate) {
+  const dates = new Set();
+  const dir = path.join(cfg.stateDir, 'events');
+  let files = [];
+  try {
+    files = fs.readdirSync(dir)
+      .filter(file => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(file))
+      .map(file => path.join(dir, file));
+  } catch {
+    return [];
+  }
+  for (const event of files.flatMap(loadEvents)) {
+    const date = event.localDate || (event.ts ? utcDateKey(new Date(event.ts)) : '');
+    if (date && date <= throughDate) dates.add(date);
+  }
+  return [...dates].sort();
 }
 
 function listReportJobs(cfg) {
@@ -534,20 +600,19 @@ function releaseLock(file) {
   try { fs.unlinkSync(file); } catch {}
 }
 
-function enqueueReportJob(cfg, date) {
+function enqueueReportJob(cfg, date, opts = {}) {
   const current = readReportJob(cfg, date);
-  if (current && current.status === 'completed') return null;
+  if (current && current.status === 'completed' && !opts.force) return null;
   const now = new Date().toISOString();
   const job = {
     date,
-    status: current && current.status ? current.status : 'pending',
+    status: 'pending',
     attempts: current && current.attempts ? current.attempts : 0,
     createdAt: current && current.createdAt ? current.createdAt : now,
     updatedAt: now,
-    nextAttemptAt: current && current.nextAttemptAt ? current.nextAttemptAt : now,
+    nextAttemptAt: opts.force ? now : (current && current.nextAttemptAt ? current.nextAttemptAt : now),
     lastError: current && current.lastError ? current.lastError : '',
   };
-  if (job.status === 'running') job.status = 'pending';
   writeReportJob(cfg, job);
   return job;
 }
@@ -556,13 +621,31 @@ function retryDelayMs(attempts) {
   return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.pow(2, Math.min(attempts, 6)) * 60 * 1000));
 }
 
-function tryScheduleYesterdayReport(cfg, now = new Date()) {
-  const date = previousLocalDateKey(now, cfg.timeZone);
-  if (!loadEventsForLocalDate(cfg, date).length) return false;
-  const job = enqueueReportJob(cfg, date);
-  if (!job) return false;
-  writeInternalLog(cfg, 'report_job_enqueued', { date, status: job.status, attempts: job.attempts });
-  spawnWorker(cfg);
+function confirmedFloor(cfg) {
+  const local = readLocalConfirmation(cfg).confirmedThrough || '';
+  const remote = minDateKey(readDeviceConfirmations(cfg).map(item => item.confirmedThrough));
+  return minDateKey([local, remote]);
+}
+
+function tryScheduleReportJobs(cfg, now = new Date(), opts = {}) {
+  const throughDate = previousLocalDateKey(now, cfg.timeZone);
+  const floor = confirmedFloor(cfg);
+  let count = 0;
+  for (const date of localEventDates(cfg, throughDate)) {
+    if (floor && date <= floor) continue;
+    const current = readReportJob(cfg, date);
+    const job = enqueueReportJob(cfg, date, { force: current && current.status === 'completed' });
+    if (!job) continue;
+    count += 1;
+    writeInternalLog(cfg, 'report_job_enqueued', {
+      date,
+      confirmedFloor: floor,
+      status: job.status,
+      attempts: job.attempts,
+    });
+  }
+  if (!count) return false;
+  if (opts.spawn !== false) spawnWorker(cfg);
   return true;
 }
 
@@ -720,8 +803,9 @@ function flush(date, opts) {
   const merged = mergeEvents(loadEvents(rawTarget), events);
   fs.writeFileSync(rawTarget, merged.map(event => JSON.stringify(event)).join('\n') + '\n');
   fs.writeFileSync(dailyTarget, summarize(merged, key, cfg.reportLanguage));
+  const confirmTarget = opts.confirm ? writeDeviceConfirmation(cfg, key) : '';
 
-  run('git', ['add', rawTarget, dailyTarget], cfg.repoPath);
+  run('git', ['add', rawTarget, dailyTarget, ...(confirmTarget ? [confirmTarget] : [])], cfg.repoPath);
   const diff = run('git', ['diff', '--cached', '--quiet'], cfg.repoPath, true);
   if (diff.status === 0) {
     writeInternalLog(cfg, 'flush_no_changes', {
@@ -729,6 +813,7 @@ function flush(date, opts) {
       eventCount: merged.length,
       localEventCount: events.length,
       deviceId: cfg.deviceId,
+      confirmed: Boolean(opts.confirm),
       pulled,
     });
     process.stdout.write(`no git changes for ${key}\n`);
@@ -741,15 +826,17 @@ function flush(date, opts) {
     eventCount: merged.length,
     localEventCount: events.length,
     deviceId: cfg.deviceId,
+    confirmed: Boolean(opts.confirm),
     rawTarget,
     dailyTarget,
+    confirmTarget,
     pulled,
     pushed: !opts.noPush,
   });
   process.stdout.write(`flushed ${key}\n`);
 }
 
-function runReportJob(cfg, date) {
+function runReportJob(cfg, date, opts = {}) {
   const lock = reportJobLockFile(cfg, date);
   if (!acquireLock(lock)) return false;
   try {
@@ -765,7 +852,8 @@ function runReportJob(cfg, date) {
       lastStartedAt: now,
     });
     try {
-      flush(date, {});
+      flush(date, { confirm: true, noPush: opts.noPush });
+      writeLocalConfirmation(cfg, date);
       writeReportJob(cfg, {
         ...readReportJob(cfg, date),
         date,
@@ -795,6 +883,12 @@ function runReportJob(cfg, date) {
 }
 
 function processReportJobs(cfg) {
+  try {
+    if (cfg.repoPath && isGitRepo(cfg.repoPath)) syncReportRepo(cfg.repoPath);
+  } catch (err) {
+    writeInternalLog(cfg, 'report_repo_sync_failed', errorDetails(err));
+  }
+  tryScheduleReportJobs(cfg, new Date(), { spawn: false });
   const now = Date.now();
   let nextDelay = 0;
   for (const job of listReportJobs(cfg)) {
@@ -844,6 +938,8 @@ function status() {
   const logFile = internalLogFile(cfg);
   const report = reportRuntime(cfg);
   const jobs = listReportJobs(cfg);
+  const localConfirmed = readLocalConfirmation(cfg).confirmedThrough || '(unset)';
+  const floor = confirmedFloor(cfg) || '(unset)';
   process.stdout.write([
     `config: ${CONFIG_PATH}`,
     `state: ${cfg.stateDir}`,
@@ -860,6 +956,8 @@ function status() {
     `reportApiBase: ${cfg.reportApiBaseUrl || '(unset)'}`,
     `reportModel: ${cfg.reportApiModel || '(unset)'}`,
     `reportApiKeyEnv: ${cfg.reportApiKeyEnv}`,
+    `confirmedThrough: ${localConfirmed}`,
+    `confirmedFloor: ${floor}`,
     `reportJobs: pending=${jobs.filter(job => job.status === 'pending').length} running=${jobs.filter(job => job.status === 'running').length} failed=${jobs.filter(job => job.status === 'failed').length} completed=${jobs.filter(job => job.status === 'completed').length}`,
     `todayEvents: ${events.length}`,
   ].join('\n') + '\n');
@@ -897,6 +995,16 @@ function selftest() {
     gitRoot: repo,
     promptPreview: 'test work token=redaction-fixture-value [REDACTION_FIXTURE]',
   }));
+  appendLine(eventFile(config(), '2026-07-09'), JSON.stringify({
+    ts: '2026-07-09T15:00:00.000Z',
+    tsUtc: '2026-07-09T15:00:00.000Z',
+    timeZone: 'Asia/Seoul',
+    localDate: '2026-07-10',
+    event: 'UserPromptSubmit',
+    cwd: repo,
+    gitRoot: repo,
+    promptPreview: 'next day work',
+  }));
   flush('2026-07-09', { noPush: true });
   const daily = fs.readFileSync(path.join(repo, 'daily', '2026-07-09.md'), 'utf8');
   const raw = fs.readFileSync(path.join(repo, 'raw', 'ai-sessions', '2026-07-09.jsonl'), 'utf8');
@@ -906,10 +1014,28 @@ function selftest() {
   if (daily.includes('redaction-fixture-value') || raw.includes('[REDACTION_FIXTURE]')) {
     throw new Error('secret redaction failed');
   }
-  enqueueReportJob(config(), '2026-07-09');
-  runReportJob(config(), '2026-07-09');
+  tryScheduleReportJobs(config(), new Date('2026-07-11T00:00:00.000Z'), { spawn: false });
+  const queuedDates = listReportJobs(config()).map(item => item.date);
+  if (!queuedDates.includes('2026-07-09') || !queuedDates.includes('2026-07-10')) {
+    throw new Error('unconfirmed report dates were not queued');
+  }
+  runReportJob(config(), '2026-07-09', { noPush: true });
+  runReportJob(config(), '2026-07-10', { noPush: true });
   const job = readReportJob(config(), '2026-07-09');
   if (!job || job.status !== 'completed') throw new Error('report job did not complete');
+  const confirmed = readLocalConfirmation(config()).confirmedThrough;
+  if (confirmed !== '2026-07-10') throw new Error('local confirmation did not advance');
+  const deviceConfirmed = readJson(deviceConfirmationFile(config()), {});
+  if (deviceConfirmed.confirmedThrough !== '2026-07-10') throw new Error('device confirmation did not advance');
+  writeJson(deviceConfirmationFile(config(), 'other-device'), {
+    deviceId: 'other-device',
+    confirmedThrough: '2026-07-08',
+    updatedAt: new Date().toISOString(),
+  });
+  tryScheduleReportJobs(config(), new Date('2026-07-11T00:00:00.000Z'), { spawn: false });
+  if (readReportJob(config(), '2026-07-09').status !== 'pending') {
+    throw new Error('lower remote confirmation did not requeue completed report');
+  }
   const hookRun = childProcess.spawnSync(process.execPath, [__filename, 'hook', 'UserPromptSubmit'], {
     env: { ...process.env, ONMHJ_CONFIG: CONFIG_PATH },
     input: JSON.stringify({ cwd: repo, session_id: 'selftest', prompt: 'hook token=redaction-fixture-value' }),

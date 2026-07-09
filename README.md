@@ -31,8 +31,10 @@ flowchart TD
   C --> D[Append local JSONL spool<br/>~/.local/state/onmhj/events/YYYY-MM-DD.jsonl]
   E[Manual backfill<br/>inject/import] --> D
 
-  B -->|next local day SessionStart| F[Enqueue yesterday report job<br/>~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json]
+  Q[Confirmed watermarks<br/>local + state/devices/*.json] --> F
+  B -->|SessionStart| F[Enqueue unconfirmed report dates<br/>after confirmed floor]
   F --> G[Detached background worker<br/>onmhj worker]
+  G -->|pull + recompute floor| F
   G --> H[flush YYYY-MM-DD]
   H --> I[git pull report repo]
   I --> J[Merge existing raw + local spool]
@@ -41,12 +43,12 @@ flowchart TD
   K --> M[Regenerate daily/YYYY-MM-DD.md<br/>language = reportLanguage]
   L --> N[git commit/push]
   M --> N
-  N -->|success| O[Mark job completed]
+  N -->|success| O[Mark job completed<br/>advance confirmedThrough]
   N -->|failure| P[Mark failed + nextAttemptAt]
   P -->|exponential backoff| G
 ```
 
-Multiple computers can use the same report repo. Give each computer a stable `deviceId`; every flush preserves existing events from other devices and regenerates the combined daily report. Failed automatic report jobs keep retrying in the background until a flush succeeds.
+Multiple computers can use the same report repo. Give each computer a stable `deviceId`; every flush preserves existing events from other devices and regenerates the combined daily report. Automatic jobs cover every local event date after the confirmed floor, not just yesterday. If another device later exposes an older `confirmedThrough`, the floor drops and affected dates get queued again. Failed jobs keep retrying in the background until a flush succeeds.
 
 ## Usage
 
@@ -136,6 +138,8 @@ Record locations:
 - local events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl` UTC date
 - internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl` UTC date, prompt excluded
 - report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
+- local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
 - worker log: `~/.local/state/onmhj/worker.log`
 - registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`, merged by local report date
 - registered repo daily: `daily/YYYY-MM-DD.md` local date, with device and combined repository summaries
+- registered repo device confirmations: `state/devices/DEVICE_ID.json`

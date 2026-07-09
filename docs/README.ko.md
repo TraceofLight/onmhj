@@ -29,8 +29,10 @@ flowchart TD
   C --> D[Append local JSONL spool<br/>~/.local/state/onmhj/events/YYYY-MM-DD.jsonl]
   E[Manual backfill<br/>inject/import] --> D
 
-  B -->|next local day SessionStart| F[Enqueue yesterday report job<br/>~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json]
+  Q[Confirmed watermarks<br/>local + state/devices/*.json] --> F
+  B -->|SessionStart| F[Enqueue unconfirmed report dates<br/>after confirmed floor]
   F --> G[Detached background worker<br/>onmhj worker]
+  G -->|pull + recompute floor| F
   G --> H[flush YYYY-MM-DD]
   H --> I[git pull report repo]
   I --> J[Merge existing raw + local spool]
@@ -39,12 +41,12 @@ flowchart TD
   K --> M[Regenerate daily/YYYY-MM-DD.md<br/>language = reportLanguage]
   L --> N[git commit/push]
   M --> N
-  N -->|success| O[Mark job completed]
+  N -->|success| O[Mark job completed<br/>advance confirmedThrough]
   N -->|failure| P[Mark failed + nextAttemptAt]
   P -->|exponential backoff| G
 ```
 
-여러 컴퓨터가 같은 report repo를 써도 된다. 각 컴퓨터에 안정적인 `deviceId`를 두면, flush 때 다른 device의 기존 event를 보존하고 합친 daily report를 다시 만든다. 실패한 자동 report job은 flush가 성공할 때까지 background에서 재시도한다.
+여러 컴퓨터가 같은 report repo를 써도 된다. 각 컴퓨터에 안정적인 `deviceId`를 두면, flush 때 다른 device의 기존 event를 보존하고 합친 daily report를 다시 만든다. 자동 job은 어제 하루가 아니라 confirmed floor 이후 local event가 있는 모든 날짜를 대상으로 한다. 다른 device가 나중에 더 오래된 `confirmedThrough`를 노출하면 floor를 낮추고 영향 날짜를 다시 queue한다. 실패한 job은 flush가 성공할 때까지 background에서 재시도한다.
 
 ## 사용
 
@@ -134,6 +136,8 @@ Claude Code는 로컬 marketplace로 설치할 수 있다.
 - local events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl` UTC date
 - internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl` UTC date, prompt excluded
 - report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
+- local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
 - worker log: `~/.local/state/onmhj/worker.log`
 - registered repo raw: `raw/ai-sessions/YYYY-MM-DD.jsonl`, report local date 기준 병합본
 - registered repo daily: `daily/YYYY-MM-DD.md` local date, device별/전체 repo 요약 포함
+- registered repo device confirmations: `state/devices/DEVICE_ID.json`
