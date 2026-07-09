@@ -3,7 +3,7 @@
   "version": "0.1.10",
   "description": "Local AI-session worklog capture with ordered confirmed-date retries.",
   "author": {
-    "name": "user_name"
+    "name": "onmhj maintainers"
   },
   "repository": "https://github.com/TraceofLight/onmhj",
   "license": "MIT",

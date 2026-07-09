@@ -3,7 +3,7 @@
   "name": "onmhj-local",
   "description": "Local marketplace for onmhj.",
   "owner": {
-    "name": "user_name"
+    "name": "onmhj maintainers"
   },
   "plugins": [
     {

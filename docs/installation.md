@@ -11,7 +11,7 @@
 Example report repo:
 
 ```sh
-/path/to/user/Documents/Github/onmhj-storage
+/path/to/onmhj-storage
 ```
 
 ## Codex From Local Checkout
@@ -19,7 +19,7 @@ Example report repo:
 From any directory:
 
 ```sh
-codex plugin marketplace add /path/to/user/Documents/Github/onmhj
+codex plugin marketplace add /path/to/onmhj
 codex plugin add onmhj@onmhj-local
 ```
 
@@ -36,7 +36,7 @@ The marketplace manifest lives at:
 After the repo has been pushed, Codex can also install from GitHub:
 
 ```sh
-codex plugin marketplace add TraceofLight/onmhj
+codex plugin marketplace add your-github-user/onmhj
 codex plugin add onmhj@onmhj-local
 ```
 
@@ -52,7 +52,7 @@ codex plugin add onmhj@onmhj-local
 From any directory:
 
 ```sh
-claude plugin marketplace add /path/to/user/Documents/Github/onmhj
+claude plugin marketplace add /path/to/onmhj
 claude plugin install onmhj@onmhj-local
 claude plugin enable onmhj@onmhj-local
 ```
@@ -64,39 +64,39 @@ Restart Claude Code after installing so the hook settings reload.
 Register the external storage repo:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js register /path/to/user/Documents/Github/onmhj-storage --prompt=preview --timezone=Asia/Seoul
+node /path/to/onmhj/bin/onmhj.js register /path/to/onmhj-storage --prompt=preview --timezone=Asia/Seoul
 ```
 
 Check config:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js status
+node /path/to/onmhj/bin/onmhj.js status
 ```
 
 Update prompt or timezone without changing the registered repo:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
+node /path/to/onmhj/bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
 ```
 
 Set a stable device id for this computer. It defaults to the hostname when unset:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --device-id=macbook-pro
+node /path/to/onmhj/bin/onmhj.js config --device-id=macbook-pro
 ```
 
 Set the owner identity used by manual/git-history backfills:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config \
-  --owner-name=TraceofLight \
+node /path/to/onmhj/bin/onmhj.js config \
+  --owner-name="Your Name" \
   --owner-email=you@example.com
 ```
 
 Daily `ejmhj` report generation should use the active Codex or Claude Code session auth by default:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent
+node /path/to/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent
 ```
 
 `report-lang` controls generated markdown language. It defaults from the user's locale when unset. Prompt templates and plugin command text stay in English.
@@ -104,7 +104,7 @@ node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --report-lang=ko -
 Use OpenAI-compatible API settings only for explicit bulk backfill jobs:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config \
+node /path/to/onmhj/bin/onmhj.js config \
   --report-auth=api \
   --report-api-base=https://example.com/v1 \
   --report-model=model-name \
@@ -134,9 +134,9 @@ Internal operational logs are stored separately and do not include prompt text:
 Inject one manual event into the local spool:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js inject \
+node /path/to/onmhj/bin/onmhj.js inject \
   --date=2026-07-08 \
-  --cwd=/path/to/user/Documents/Workspace/project-generator \
+  --cwd=/path/to/workspace/project-generator \
   --source=manual \
   --source-id=manual-2026-07-08-1 \
   --text="Work summary"
@@ -145,7 +145,7 @@ node /path/to/user/Documents/Github/onmhj/bin/onmhj.js inject \
 Bulk import normalized JSONL:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js import /tmp/onmhj-backfill.jsonl
+node /path/to/onmhj/bin/onmhj.js import /tmp/onmhj-backfill.jsonl
 ```
 
 Imported events go to `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`; run `flush YYYY-MM-DD` to write the report repo.
@@ -172,14 +172,14 @@ Run a short Codex session in a target repo:
 
 ```sh
 codex exec --dangerously-bypass-hook-trust \
-  -C /path/to/user/Documents/Workspace/execore-clone \
+  -C /path/to/workspace/example-repo \
   "onmhj smoke test. Reply with the repo name and clean git status only."
 ```
 
 Confirm events were captured:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js status
+node /path/to/onmhj/bin/onmhj.js status
 tail -n 5 ~/.local/state/onmhj/events/$(date -u +%F).jsonl
 tail -n 20 ~/.local/state/onmhj/internal/$(date -u +%F).jsonl
 ```
@@ -187,7 +187,7 @@ tail -n 20 ~/.local/state/onmhj/internal/$(date -u +%F).jsonl
 Flush to the report repo:
 
 ```sh
-node /path/to/user/Documents/Github/onmhj/bin/onmhj.js flush
+node /path/to/onmhj/bin/onmhj.js flush
 ```
 
 Before writing, `flush` pulls the report repo when an upstream exists, merges the existing `raw/ai-sessions/YYYY-MM-DD.jsonl` with this device's local events, dedupes them, and regenerates the daily markdown. This lets multiple computers append to the same report repo date without overwriting each other.

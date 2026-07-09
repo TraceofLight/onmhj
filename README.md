@@ -22,7 +22,7 @@ Agent handoff prompt:
 
 ```txt
 Read docs/installation.md and install onmhj for Codex.
-Use /path/to/user/Documents/Github/onmhj-storage as the report repo.
+Use /path/to/onmhj-storage as the report repo.
 After installing, run the smoke test and flush one report.
 ```
 
@@ -39,7 +39,7 @@ Set the device, owner, report language, and auth policy:
 ```sh
 node bin/onmhj.js config \
   --device-id=macbook-pro \
-  --owner-name=TraceofLight \
+  --owner-name="Your Name" \
   --owner-email=you@example.com \
   --report-lang=ko \
   --report-auth=agent

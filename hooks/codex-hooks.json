@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-/path/to/user/Documents/Github/onmhj}\"; exec node \"$ONMHJ_ROOT/bin/onmhj.js\" hook SessionStart",
+            "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${ONMHJ_ROOT:-}}}\"; [ -n \"$ONMHJ_ROOT\" ] || exit 0; exec node \"$ONMHJ_ROOT/bin/onmhj.js\" hook SessionStart",
             "timeout": 5,
             "statusMessage": "Recording onmhj session..."
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-/path/to/user/Documents/Github/onmhj}\"; exec node \"$ONMHJ_ROOT/bin/onmhj.js\" hook UserPromptSubmit",
+            "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${ONMHJ_ROOT:-}}}\"; [ -n \"$ONMHJ_ROOT\" ] || exit 0; exec node \"$ONMHJ_ROOT/bin/onmhj.js\" hook UserPromptSubmit",
             "timeout": 5,
             "statusMessage": "Recording onmhj prompt..."
           }

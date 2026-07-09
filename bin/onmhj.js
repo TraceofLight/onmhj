@@ -999,7 +999,7 @@ function selftest() {
     event: 'UserPromptSubmit',
     cwd: repo,
     gitRoot: repo,
-    promptPreview: 'test work token=redaction-fixture-value [REDACTION_FIXTURE]',
+    promptPreview: 'test work token=redaction-fixture-value',
   }));
   appendLine(eventFile(config(), '2026-07-09'), JSON.stringify({
     ts: '2026-07-09T15:00:00.000Z',
@@ -1017,7 +1017,7 @@ function selftest() {
   if (!daily) throw new Error('daily file missing');
   if (!daily.includes('## 장치')) throw new Error('localized device summary missing');
   if (!raw.includes('"deviceId":"other-device"')) throw new Error('existing raw event was not preserved');
-  if (daily.includes('redaction-fixture-value') || raw.includes('[REDACTION_FIXTURE]')) {
+  if (daily.includes('redaction-fixture-value') || raw.includes('redaction-fixture-value')) {
     throw new Error('secret redaction failed');
   }
   tryScheduleReportJobs(config(), new Date('2026-07-11T00:00:00.000Z'), { spawn: false });
@@ -1097,12 +1097,12 @@ function selftest() {
     cwd: repo,
     source: 'selftest',
     sourceId: 'selftest-import',
-    promptPreview: 'import token=def1234567890',
+    promptPreview: 'import token=redaction-import-fixture',
   }) + '\n');
   importEvents(importFile);
   const afterImport = fs.readFileSync(eventFile(config(), '2026-07-09'), 'utf8');
   if (!afterImport.includes('"sourceId":"selftest-import"')) throw new Error('manual import missing');
-  if (afterImport.includes('def1234567890')) throw new Error('manual import redaction failed');
+  if (afterImport.includes('redaction-import-fixture')) throw new Error('manual import redaction failed');
   process.stdout.write('selftest ok\n');
 }
 
