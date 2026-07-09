@@ -13,6 +13,8 @@ function usage() {
     '  onmhj hook <event>',
     '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City]',
     '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City]',
+    '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
+    '  onmhj import <events.jsonl>',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
     '  onmhj status',
     '  onmhj selftest',
@@ -220,6 +222,15 @@ function parseOptions(args) {
   for (const arg of args) {
     if (arg.startsWith('--prompt=')) opts.promptMode = arg.slice('--prompt='.length);
     if (arg.startsWith('--timezone=')) opts.timeZone = arg.slice('--timezone='.length);
+    if (arg.startsWith('--date=')) opts.date = arg.slice('--date='.length);
+    if (arg.startsWith('--cwd=')) opts.cwd = arg.slice('--cwd='.length);
+    if (arg.startsWith('--repo=')) opts.cwd = arg.slice('--repo='.length);
+    if (arg.startsWith('--source=')) opts.source = arg.slice('--source='.length);
+    if (arg.startsWith('--source-id=')) opts.sourceId = arg.slice('--source-id='.length);
+    if (arg.startsWith('--session=')) opts.sessionId = arg.slice('--session='.length);
+    if (arg.startsWith('--text=')) opts.text = arg.slice('--text='.length);
+    if (arg.startsWith('--ts=')) opts.tsUtc = arg.slice('--ts='.length);
+    if (arg.startsWith('--event=')) opts.event = arg.slice('--event='.length);
     if (arg === '--no-push') opts.noPush = true;
   }
   return opts;
@@ -263,6 +274,79 @@ function configure(opts) {
     timeZone: cfg.timeZone,
   });
   process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone}\n`);
+}
+
+function eventDedupeKey(event) {
+  if (event.sourceId) return `sourceId:${event.sourceId}`;
+  return '';
+}
+
+function appendEventRecord(cfg, event) {
+  const file = eventFile(cfg, utcDateKey(new Date(event.tsUtc || event.ts)));
+  const key = eventDedupeKey(event);
+  if (key && loadEvents(file).some(existing => eventDedupeKey(existing) === key)) return false;
+  appendLine(file, JSON.stringify(event));
+  return true;
+}
+
+function normalizeImportedEvent(raw, cfg) {
+  const tsUtc = String(raw.tsUtc || raw.ts || new Date().toISOString());
+  const date = new Date(tsUtc);
+  if (Number.isNaN(date.getTime())) throw new Error(`invalid timestamp: ${tsUtc}`);
+  const cwd = raw.cwd || raw.gitRoot || process.cwd();
+  const gitRoot = raw.gitRoot || findGitRoot(cwd);
+  const event = {
+    ts: tsUtc,
+    tsUtc,
+    timeZone: raw.timeZone || cfg.timeZone,
+    localDate: raw.localDate || localDateKey(date, raw.timeZone || cfg.timeZone),
+    event: raw.event || 'ManualImport',
+    cwd,
+    gitRoot,
+    gitBranch: raw.gitBranch || (gitRoot ? gitValue(['branch', '--show-current'], gitRoot) : ''),
+    sessionId: raw.sessionId || raw.session_id || '',
+  };
+  if (raw.source) event.source = String(raw.source);
+  if (raw.sourceId) event.sourceId = String(raw.sourceId);
+  if (raw.prompt) event.prompt = redactSecrets(raw.prompt);
+  if (raw.promptPreview) event.promptPreview = redactSecrets(raw.promptPreview).slice(0, 300);
+  if (!event.prompt && !event.promptPreview && raw.text) {
+    event.promptPreview = redactSecrets(raw.text).slice(0, 300);
+  }
+  return event;
+}
+
+function inject(opts) {
+  if (!opts.text) throw new Error('inject requires --text=TEXT');
+  const cfg = config();
+  const raw = {
+    tsUtc: opts.tsUtc || (opts.date ? `${opts.date}T00:00:00.000Z` : new Date().toISOString()),
+    localDate: opts.date || '',
+    cwd: opts.cwd || process.cwd(),
+    event: opts.event || 'ManualImport',
+    source: opts.source || 'manual',
+    sourceId: opts.sourceId || '',
+    sessionId: opts.sessionId || '',
+    text: opts.text,
+  };
+  const added = appendEventRecord(cfg, normalizeImportedEvent(raw, cfg));
+  process.stdout.write(`${added ? 'injected' : 'skipped duplicate'}\n`);
+}
+
+function importEvents(file) {
+  if (!file) throw new Error(usage());
+  const cfg = config();
+  let added = 0;
+  let skipped = 0;
+  const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  for (const line of lines) {
+    const parsed = parseJsonFromString(line);
+    if (!parsed.ok) throw new Error(`invalid JSONL line: ${parsed.error}`);
+    if (appendEventRecord(cfg, normalizeImportedEvent(parsed.value, cfg))) added += 1;
+    else skipped += 1;
+  }
+  writeInternalLog(cfg, 'import', { file, added, skipped });
+  process.stdout.write(`imported ${added}, skipped ${skipped}\n`);
 }
 
 function loadEvents(file) {
@@ -421,6 +505,23 @@ function selftest() {
   configure({ timeZone: 'UTC', promptMode: 'off' });
   const updated = config();
   if (updated.timeZone !== 'UTC' || updated.promptMode !== 'off') throw new Error('config update failed');
+  inject({ date: '2026-07-09', cwd: repo, text: 'manual token=redaction-fixture-value', sourceId: 'selftest-inject' });
+  const imported = fs.readFileSync(eventFile(config(), '2026-07-09'), 'utf8');
+  if (!imported.includes('"sourceId":"selftest-inject"')) throw new Error('manual inject missing');
+  if (imported.includes('redaction-fixture-value')) throw new Error('manual inject redaction failed');
+  const importFile = path.join(tmp, 'import.jsonl');
+  fs.writeFileSync(importFile, JSON.stringify({
+    tsUtc: '2026-07-09T01:00:00.000Z',
+    localDate: '2026-07-09',
+    cwd: repo,
+    source: 'selftest',
+    sourceId: 'selftest-import',
+    promptPreview: 'import token=def1234567890',
+  }) + '\n');
+  importEvents(importFile);
+  const afterImport = fs.readFileSync(eventFile(config(), '2026-07-09'), 'utf8');
+  if (!afterImport.includes('"sourceId":"selftest-import"')) throw new Error('manual import missing');
+  if (afterImport.includes('def1234567890')) throw new Error('manual import redaction failed');
   process.stdout.write('selftest ok\n');
 }
 
@@ -430,6 +531,8 @@ function main() {
   if (cmd === 'hook') return hook(first || 'unknown');
   if (cmd === 'register') return register(first, opts);
   if (cmd === 'config') return configure(opts);
+  if (cmd === 'inject') return inject(opts);
+  if (cmd === 'import') return importEvents(first);
   if (cmd === 'flush') return flush(first && !first.startsWith('--') ? first : undefined, opts);
   if (cmd === 'status') return status();
   if (cmd === 'selftest') return selftest();

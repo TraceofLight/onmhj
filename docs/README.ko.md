@@ -40,6 +40,18 @@ prompt 또는 timezone 설정 변경:
 node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
 ```
 
+수동 이벤트 1건 주입:
+
+```sh
+node bin/onmhj.js inject --date=2026-07-08 --cwd=/path/to/repo --source=manual --source-id=manual-2026-07-08-1 --text="작업 요약"
+```
+
+정규화된 JSONL 이벤트 가져오기:
+
+```sh
+node bin/onmhj.js import /tmp/onmhj-backfill.jsonl
+```
+
 오늘치 기록 생성, commit, push:
 
 ```sh

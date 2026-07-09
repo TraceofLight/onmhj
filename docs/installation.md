@@ -97,6 +97,27 @@ Internal operational logs are stored separately and do not include prompt text:
 ~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl
 ```
 
+## Manual Injection
+
+Inject one manual event into the local spool:
+
+```sh
+node /path/to/user/Documents/Github/onmhj/bin/onmhj.js inject \
+  --date=2026-07-08 \
+  --cwd=/path/to/user/Documents/Workspace/project-generator \
+  --source=manual \
+  --source-id=manual-2026-07-08-1 \
+  --text="Work summary"
+```
+
+Bulk import normalized JSONL:
+
+```sh
+node /path/to/user/Documents/Github/onmhj/bin/onmhj.js import /tmp/onmhj-backfill.jsonl
+```
+
+Imported events go to `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`; run `flush YYYY-MM-DD` to write the report repo.
+
 ## Privacy
 
 `onmhj` redacts common token, password, secret, API key, bearer token, and private-key patterns before writing prompt text to local events or report repos.

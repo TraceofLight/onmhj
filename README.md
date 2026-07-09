@@ -42,6 +42,18 @@ Update prompt or timezone config:
 node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
 ```
 
+Manually inject one event:
+
+```sh
+node bin/onmhj.js inject --date=2026-07-08 --cwd=/path/to/repo --source=manual --source-id=manual-2026-07-08-1 --text="Work summary"
+```
+
+Import normalized JSONL events:
+
+```sh
+node bin/onmhj.js import /tmp/onmhj-backfill.jsonl
+```
+
 Flush today's records, commit, and push:
 
 ```sh
