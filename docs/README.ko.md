@@ -14,9 +14,21 @@ Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 - automatic catch-up: background job이 확정되지 않은 날짜를 `confirmedThrough`가 전진할 때까지 재시도한다.
 - agent auth default: 일반 리포트 생성은 Codex/Claude Code의 active auth를 기본값으로 쓴다.
 
+## Install
+
+[docs/installation.md](./installation.md)를 따른다.
+
+Agent handoff prompt:
+
+```txt
+Read docs/installation.md and install onmhj for Codex.
+Use /path/to/user/Documents/Github/onmhj-storage as the report repo.
+After installing, run the smoke test and flush one report.
+```
+
 ## Quick Start
 
-플러그인 설치 후 report repo를 등록한다:
+설치 후 report repo를 등록한다:
 
 ```sh
 node bin/onmhj.js register /path/to/worklog-git-repo --prompt=preview --timezone=Asia/Seoul
@@ -131,15 +143,3 @@ Report repo:
 - prompt capture 기본값은 `preview`다. 필요하면 `full` 또는 `off`를 쓴다.
 - prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
 - report local date는 설정 timezone 기준이고, event spool 파일명은 UTC 기준이다.
-
-## Install
-
-[docs/installation.md](./installation.md)를 따른다.
-
-Agent handoff prompt:
-
-```txt
-Read docs/installation.md and install onmhj for Codex.
-Use /path/to/user/Documents/Github/onmhj-storage as the report repo.
-After installing, run the smoke test and flush one report.
-```

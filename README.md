@@ -14,9 +14,21 @@ AI-session worklog capture for Codex and Claude Code.
 - Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.
 - Agent auth by default: daily report generation uses the active Codex/Claude Code auth unless API mode is explicitly enabled.
 
+## Install
+
+See [docs/installation.md](./docs/installation.md).
+
+Agent handoff prompt:
+
+```txt
+Read docs/installation.md and install onmhj for Codex.
+Use /path/to/user/Documents/Github/onmhj-storage as the report repo.
+After installing, run the smoke test and flush one report.
+```
+
 ## Quick Start
 
-Install the plugin, then register the report repo:
+After install, register the report repo:
 
 ```sh
 node bin/onmhj.js register /path/to/worklog-git-repo --prompt=preview --timezone=Asia/Seoul
@@ -131,15 +143,3 @@ Report repo:
 - Prompt capture defaults to `preview`; use `full` or `off` as needed.
 - Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
 - Local report dates use the configured timezone; event spool filenames use UTC.
-
-## Install
-
-See [docs/installation.md](./docs/installation.md).
-
-Agent handoff prompt:
-
-```txt
-Read docs/installation.md and install onmhj for Codex.
-Use /path/to/user/Documents/Github/onmhj-storage as the report repo.
-After installing, run the smoke test and flush one report.
-```
