@@ -43,22 +43,19 @@ push 없이 확인:
 node bin/onmhj.js flush 2026-07-09 --no-push
 ```
 
-## Codex hook 연결
+## 설치
 
-`hooks/codex-hooks.json` 내용을 `~/.codex/hooks.json`에 병합한다.
+자세한 절차는 [Installation](./docs/installation.md)을 따른다.
 
-## Codex plugin 설치
+에이전트에게 맡길 때는 이렇게 말한다:
 
-이 repo를 local marketplace로 등록한 뒤 플러그인을 설치한다.
-
-```sh
-codex plugin marketplace add /path/to/user/Documents/Github/onmhj
-codex plugin add onmhj@onmhj-local
+```txt
+Read docs/installation.md and install onmhj for Codex.
+Use /path/to/user/Documents/Github/onmhj-storage as the report repo.
+After installing, run the smoke test and flush one report.
 ```
 
-Codex는 `.agents/plugins/marketplace.json`를 marketplace manifest로 읽는다.
-
-설치 후 `/hooks`에서 hook을 승인하고 새 세션을 시작한다.
+Claude Code 지원은 아직 패키징 전이다. 설치됐다고 말하려면 `.claude-plugin` manifest를 먼저 추가해야 한다.
 
 기록 위치:
 
