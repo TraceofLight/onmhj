@@ -548,6 +548,7 @@ try {
       ...errorDetails(err),
     });
   } catch {}
+  if (process.argv[2] === 'hook') process.exit(0);
   process.stderr.write((err && err.message ? err.message : String(err)) + '\n');
   process.exit(1);
 }
