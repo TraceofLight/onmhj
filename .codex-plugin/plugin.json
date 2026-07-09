@@ -1,0 +1,24 @@
+{
+  "name": "onmhj",
+  "version": "0.1.0",
+  "description": "Local AI-session worklog capture and git-backed daily sync.",
+  "author": {
+    "name": "user_name"
+  },
+  "repository": "https://github.com/TraceofLight/onmhj",
+  "license": "MIT",
+  "keywords": ["worklog", "codex", "hooks", "git"],
+  "hooks": "./hooks/codex-hooks.json",
+  "interface": {
+    "displayName": "Onmhj",
+    "shortDescription": "Record AI-session worklogs locally.",
+    "longDescription": "Captures Codex hook events to local JSONL, then flushes daily raw and markdown logs to a user-registered git repository.",
+    "developerName": "user_name",
+    "category": "Productivity",
+    "capabilities": ["Lifecycle hooks", "Local storage", "Git sync"],
+    "defaultPrompt": [
+      "Show today's AI worklog status.",
+      "Flush today's worklog to git."
+    ]
+  }
+}
