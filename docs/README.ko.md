@@ -58,6 +58,8 @@ node bin/onmhj.js flush 2026-07-09
 node bin/onmhj.js flush 2026-07-09 --no-push
 ```
 
+`flush`와 worker report job은 쓰기 전에 report repo에서 `git pull --rebase --autostash`를 실행한다. `onmhj flush` 밖에서 report repo를 직접 수정하거나 custom backfill script를 돌릴 때는 먼저 report repo를 pull한 뒤, 기존 raw event를 merge/dedupe해야 한다.
+
 ## Workflow
 
 ![onmhj workflow](./assets/workflow.svg)
@@ -97,6 +99,8 @@ node bin/onmhj.js import /tmp/onmhj-backfill.jsonl
 
 git-history 백필은 설정된 owner identity가 author 또는 committer인 커밋만 포함해야 한다.
 
+custom backfill은 최신 report repo 상태에서 시작해야 한다. `raw/`, `daily/`, `reports/`, `state/`를 쓰기 전에 report repo에서 `git pull --rebase --autostash`를 실행한다.
+
 ## Storage
 
 Local machine:
@@ -118,6 +122,7 @@ Report repo:
 
 - hook은 local append만 한다.
 - git sync/push는 `flush` 또는 worker 기반 report job에서만 실행한다.
+- `flush`/worker는 쓰기 전에 pull한다. 직접 report repo를 수정하거나 custom backfill을 실행하면 동일한 pull을 수동으로 먼저 해야 한다.
 - prompt capture 기본값은 `preview`다. 필요하면 `full` 또는 `off`를 쓴다.
 - prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
 - report local date는 설정 timezone 기준이고, event spool 파일명은 UTC 기준이다.

@@ -190,7 +190,9 @@ Flush to the report repo:
 node /path/to/onmhj/bin/onmhj.js flush
 ```
 
-Before writing, `flush` pulls the report repo when an upstream exists, merges the existing `raw/ai-sessions/YYYY-MM-DD.jsonl` with this device's local events, dedupes them, and regenerates the daily markdown. This lets multiple computers append to the same report repo date without overwriting each other.
+Before writing, `flush` pulls the report repo with `git pull --rebase --autostash` when an upstream exists, merges the existing `raw/ai-sessions/YYYY-MM-DD.jsonl` with this device's local events, dedupes them, and regenerates the daily markdown. This lets multiple computers append to the same report repo date without overwriting each other.
+
+If you bypass `flush` with a custom backfill or direct report-repo edit, run the same pull first. Never generate from a stale checkout of the report repo.
 
 Expected outputs in the report repo:
 

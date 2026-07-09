@@ -58,6 +58,8 @@ node bin/onmhj.js flush 2026-07-09
 node bin/onmhj.js flush 2026-07-09 --no-push
 ```
 
+`flush` and worker report jobs pull the report repo with `git pull --rebase --autostash` before writing. If you edit the report repo directly or run a custom backfill script outside `onmhj flush`, pull the report repo first, then merge/dedupe existing raw events instead of overwriting them.
+
 ## Workflow
 
 ![onmhj workflow](./docs/assets/workflow.svg)
@@ -97,6 +99,8 @@ node bin/onmhj.js import /tmp/onmhj-backfill.jsonl
 
 Git-history backfills must include only commits authored or committed by the configured owner identity.
 
+Custom backfill jobs must start from the latest report repo state. Run `git pull --rebase --autostash` in the report repo before writing `raw/`, `daily/`, `reports/`, or `state/`.
+
 ## Storage
 
 Local machine:
@@ -118,6 +122,7 @@ Report repo:
 
 - Hooks append locally only.
 - Git sync and push run only during `flush` or worker-driven report jobs.
+- `flush`/worker pulls before writing; direct report-repo edits and custom backfills must do the same manually.
 - Prompt capture defaults to `preview`; use `full` or `off` as needed.
 - Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
 - Local report dates use the configured timezone; event spool filenames use UTC.
