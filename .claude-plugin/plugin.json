@@ -1,7 +1,7 @@
 {
   "name": "onmhj",
-  "version": "0.1.4",
-  "description": "Local AI-session worklog capture and git-backed daily sync.",
+  "version": "0.1.5",
+  "description": "Local AI-session worklog capture with agent-auth daily reports and git-backed sync.",
   "author": {
     "name": "user_name"
   },

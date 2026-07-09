@@ -79,6 +79,30 @@ Update prompt or timezone without changing the registered repo:
 node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
 ```
 
+Set the owner identity used by manual/git-history backfills:
+
+```sh
+node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config \
+  --owner-name=TraceofLight \
+  --owner-email=you@example.com
+```
+
+Daily `ejmhj` report generation should use the active Codex or Claude Code session auth by default:
+
+```sh
+node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config --report-auth=agent
+```
+
+Use OpenAI-compatible API settings only for explicit bulk backfill jobs:
+
+```sh
+node /path/to/user/Documents/Github/onmhj/bin/onmhj.js config \
+  --report-auth=api \
+  --report-api-base=https://example.com/v1 \
+  --report-model=model-name \
+  --report-api-key-env=ONMHJ_LLM_API_KEY
+```
+
 Config is stored at:
 
 ```txt
@@ -117,6 +141,8 @@ node /path/to/user/Documents/Github/onmhj/bin/onmhj.js import /tmp/onmhj-backfil
 ```
 
 Imported events go to `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`; run `flush YYYY-MM-DD` to write the report repo.
+
+When importing git history, prefilter commits to the configured owner identity. Include only commits where author or committer matches the configured owner name or email. This prevents team repo history from being reported as the user's own work.
 
 ## Privacy
 

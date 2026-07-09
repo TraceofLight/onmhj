@@ -6,13 +6,14 @@ const childProcess = require('child_process');
 
 const CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
+const DEFAULT_REPORT_API_KEY_ENV = 'ONMHJ_LLM_API_KEY';
 
 function usage() {
   return [
     'Usage:',
     '  onmhj hook <event>',
-    '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City]',
-    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City]',
+    '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City] [--owner-name=NAME] [--owner-email=EMAIL] [--report-auth=agent|api]',
+    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City] [--owner-name=NAME] [--owner-email=EMAIL] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
@@ -41,6 +42,12 @@ function config() {
     repoPath: cfg.repoPath || '',
     promptMode: cfg.promptMode || 'preview',
     timeZone: normalizeTimeZone(cfg.timeZone),
+    ownerName: cfg.ownerName || globalGitConfig('user.name') || os.userInfo().username,
+    ownerEmail: cfg.ownerEmail || globalGitConfig('user.email') || '',
+    reportAuth: cfg.reportAuth || 'agent',
+    reportApiBaseUrl: cfg.reportApiBaseUrl || '',
+    reportApiModel: cfg.reportApiModel || '',
+    reportApiKeyEnv: cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV,
   };
 }
 
@@ -125,6 +132,10 @@ function run(cmd, args, cwd, allowFail = false) {
 function gitValue(args, cwd) {
   const out = run('git', args, cwd, true);
   return out.status === 0 ? out.stdout.trim() : '';
+}
+
+function globalGitConfig(key) {
+  return gitValue(['config', '--global', '--get', key], process.cwd());
 }
 
 function findGitRoot(cwd) {
@@ -222,6 +233,12 @@ function parseOptions(args) {
   for (const arg of args) {
     if (arg.startsWith('--prompt=')) opts.promptMode = arg.slice('--prompt='.length);
     if (arg.startsWith('--timezone=')) opts.timeZone = arg.slice('--timezone='.length);
+    if (arg.startsWith('--owner-name=')) opts.ownerName = arg.slice('--owner-name='.length);
+    if (arg.startsWith('--owner-email=')) opts.ownerEmail = arg.slice('--owner-email='.length);
+    if (arg.startsWith('--report-auth=')) opts.reportAuth = arg.slice('--report-auth='.length);
+    if (arg.startsWith('--report-api-base=')) opts.reportApiBaseUrl = arg.slice('--report-api-base='.length);
+    if (arg.startsWith('--report-model=')) opts.reportApiModel = arg.slice('--report-model='.length);
+    if (arg.startsWith('--report-api-key-env=')) opts.reportApiKeyEnv = arg.slice('--report-api-key-env='.length);
     if (arg.startsWith('--date=')) opts.date = arg.slice('--date='.length);
     if (arg.startsWith('--cwd=')) opts.cwd = arg.slice('--cwd='.length);
     if (arg.startsWith('--repo=')) opts.cwd = arg.slice('--repo='.length);
@@ -246,11 +263,16 @@ function register(repoPath, opts) {
   cfg.repoPath = resolved;
   if (opts.promptMode) cfg.promptMode = opts.promptMode;
   if (opts.timeZone) cfg.timeZone = opts.timeZone;
+  applyOwnerConfig(cfg, opts);
+  applyReportConfig(cfg, opts);
   writeJson(CONFIG_PATH, cfg);
   writeInternalLog(cfg, 'register', {
     repoPath: resolved,
     promptMode: cfg.promptMode,
     timeZone: cfg.timeZone,
+    ownerName: cfg.ownerName,
+    ownerEmail: cfg.ownerEmail,
+    reportAuth: cfg.reportAuth,
   });
   process.stdout.write(`registered ${resolved}\n`);
 }
@@ -260,20 +282,65 @@ function validateConfigOptions(opts) {
     throw new Error('prompt mode must be preview, full, or off');
   }
   if (opts.timeZone) localDateKey(new Date(), opts.timeZone);
+  if (opts.reportAuth && !['agent', 'api'].includes(opts.reportAuth)) {
+    throw new Error('report auth must be agent or api');
+  }
+  for (const key of ['reportApiBaseUrl', 'reportApiModel', 'reportApiKeyEnv']) {
+    if (opts[key] && /[\r\n]/.test(opts[key])) throw new Error(`${key} must be a single line`);
+  }
+  for (const key of ['ownerName', 'ownerEmail']) {
+    if (opts[key] && /[\r\n]/.test(opts[key])) throw new Error(`${key} must be a single line`);
+  }
+  if (opts.reportApiBaseUrl) new URL(opts.reportApiBaseUrl);
+}
+
+function applyOwnerConfig(cfg, opts) {
+  if (opts.ownerName) cfg.ownerName = opts.ownerName;
+  if (opts.ownerEmail) cfg.ownerEmail = opts.ownerEmail;
+}
+
+function applyReportConfig(cfg, opts) {
+  if (opts.reportAuth) cfg.reportAuth = opts.reportAuth;
+  if (opts.reportApiBaseUrl) cfg.reportApiBaseUrl = opts.reportApiBaseUrl;
+  if (opts.reportApiModel) cfg.reportApiModel = opts.reportApiModel;
+  if (opts.reportApiKeyEnv) cfg.reportApiKeyEnv = opts.reportApiKeyEnv;
+}
+
+function reportRuntime(cfg) {
+  if (cfg.reportAuth === 'api') {
+    return {
+      auth: 'api',
+      baseUrl: cfg.reportApiBaseUrl,
+      model: cfg.reportApiModel,
+      apiKeyEnv: cfg.reportApiKeyEnv,
+      hasApiKey: Boolean(process.env[cfg.reportApiKeyEnv]),
+    };
+  }
+  return {
+    auth: 'agent',
+    description: 'Use the active Codex/Claude Code session auth for daily report generation.',
+  };
 }
 
 function configure(opts) {
   validateConfigOptions(opts);
-  if (!opts.promptMode && !opts.timeZone) throw new Error(usage());
+  if (!opts.promptMode && !opts.timeZone && !opts.ownerName && !opts.ownerEmail && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
+    throw new Error(usage());
+  }
   const cfg = config();
   if (opts.promptMode) cfg.promptMode = opts.promptMode;
   if (opts.timeZone) cfg.timeZone = opts.timeZone;
+  applyOwnerConfig(cfg, opts);
+  applyReportConfig(cfg, opts);
   writeJson(CONFIG_PATH, cfg);
   writeInternalLog(cfg, 'config', {
     promptMode: cfg.promptMode,
     timeZone: cfg.timeZone,
+    ownerName: cfg.ownerName,
+    ownerEmail: cfg.ownerEmail,
+    reportAuth: cfg.reportAuth,
   });
-  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone}\n`);
+  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone} reportAuth=${cfg.reportAuth}\n`);
 }
 
 function eventDedupeKey(event) {
@@ -456,6 +523,7 @@ function status() {
   const key = localDateKey(new Date(), cfg.timeZone);
   const events = loadEventsForLocalDate(cfg, key);
   const logFile = internalLogFile(cfg);
+  const report = reportRuntime(cfg);
   process.stdout.write([
     `config: ${CONFIG_PATH}`,
     `state: ${cfg.stateDir}`,
@@ -463,6 +531,12 @@ function status() {
     `repo: ${cfg.repoPath || '(not registered)'}`,
     `prompt: ${cfg.promptMode}`,
     `timeZone: ${cfg.timeZone}`,
+    `ownerName: ${cfg.ownerName}`,
+    `ownerEmail: ${cfg.ownerEmail || '(unset)'}`,
+    `reportAuth: ${report.auth}`,
+    `reportApiBase: ${cfg.reportApiBaseUrl || '(unset)'}`,
+    `reportModel: ${cfg.reportApiModel || '(unset)'}`,
+    `reportApiKeyEnv: ${cfg.reportApiKeyEnv}`,
     `todayEvents: ${events.length}`,
   ].join('\n') + '\n');
 }
@@ -505,6 +579,23 @@ function selftest() {
   configure({ timeZone: 'UTC', promptMode: 'off' });
   const updated = config();
   if (updated.timeZone !== 'UTC' || updated.promptMode !== 'off') throw new Error('config update failed');
+  configure({ ownerName: 'onmhj-owner', ownerEmail: 'owner@example.local' });
+  const ownerCfg = config();
+  if (ownerCfg.ownerName !== 'onmhj-owner' || ownerCfg.ownerEmail !== 'owner@example.local') {
+    throw new Error('owner config failed');
+  }
+  if (updated.reportAuth !== 'agent') throw new Error('default report auth must be agent');
+  configure({
+    reportAuth: 'api',
+    reportApiBaseUrl: 'https://example.invalid/v1',
+    reportApiModel: 'test-model',
+    reportApiKeyEnv: 'ONMHJ_TEST_KEY',
+  });
+  const apiCfg = config();
+  const apiRuntime = reportRuntime(apiCfg);
+  if (apiRuntime.auth !== 'api' || apiRuntime.baseUrl !== 'https://example.invalid/v1' || apiRuntime.model !== 'test-model') {
+    throw new Error('api report config failed');
+  }
   inject({ date: '2026-07-09', cwd: repo, text: 'manual token=redaction-fixture-value', sourceId: 'selftest-inject' });
   const imported = fs.readFileSync(eventFile(config(), '2026-07-09'), 'utf8');
   if (!imported.includes('"sourceId":"selftest-inject"')) throw new Error('manual inject missing');

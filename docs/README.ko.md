@@ -9,6 +9,9 @@
 - 기존 wiki repo를 기본값으로 쓰지 않는다.
 - hook 안에서는 로컬 append만 한다.
 - git sync/push는 명시적으로 `flush`할 때만 한다.
+- 일반적인 하루 단위 리포트 생성은 활성 Codex/Claude Code auth를 기본값으로 쓴다(`reportAuth=agent`).
+- OpenAI 호환 API 설정은 대량 백필 작업용 선택 경로다.
+- git-history 백필은 설정된 owner identity가 author 또는 committer인 커밋만 포함해야 한다.
 - 프롬프트 저장 기본값은 `preview`다. 필요하면 `full` 또는 `off`로 바꾼다.
 - 저장되는 프롬프트/리포트 입력은 token, password, key류 패턴을 best-effort로 redaction한다.
 - 이벤트 timestamp와 local event 파일명은 UTC 기준이다.
@@ -38,6 +41,18 @@ prompt 또는 timezone 설정 변경:
 
 ```sh
 node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
+```
+
+owner/report auth 정책 설정:
+
+```sh
+node bin/onmhj.js config --owner-name=TraceofLight --owner-email=you@example.com --report-auth=agent
+```
+
+대량 백필용 API 모드:
+
+```sh
+node bin/onmhj.js config --report-auth=api --report-api-base=https://example.com/v1 --report-model=model-name --report-api-key-env=ONMHJ_LLM_API_KEY
 ```
 
 수동 이벤트 1건 주입:

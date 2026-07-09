@@ -11,6 +11,9 @@ Korean documentation: [docs/README.ko.md](./docs/README.ko.md)
 - Do not use an existing wiki repo as the default.
 - Hooks only append local records.
 - Git sync and push only happen when `flush` is run explicitly.
+- Normal daily report generation defaults to the active Codex/Claude Code auth (`reportAuth=agent`).
+- OpenAI-compatible API settings are optional and intended for bulk backfill jobs.
+- Git-history backfills must include only commits authored or committed by the configured owner identity.
 - Prompt capture defaults to `preview`. Use `full` or `off` when needed.
 - Stored prompts and report inputs get best-effort redaction for token, password, and key-like patterns.
 - Event timestamps and local event filenames use UTC.
@@ -40,6 +43,18 @@ Update prompt or timezone config:
 
 ```sh
 node bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
+```
+
+Set owner/report auth policy:
+
+```sh
+node bin/onmhj.js config --owner-name=TraceofLight --owner-email=you@example.com --report-auth=agent
+```
+
+Optional API mode for bulk backfill:
+
+```sh
+node bin/onmhj.js config --report-auth=api --report-api-base=https://example.com/v1 --report-model=model-name --report-api-key-env=ONMHJ_LLM_API_KEY
 ```
 
 Manually inject one event:
