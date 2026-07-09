@@ -1,6 +1,8 @@
 # onmhj
 
-오늘뭐했지. Codex hook 이벤트를 로컬 JSONL로 쌓고, 등록한 별도 git repo로 하루치 기록을 push한다.
+`onmhj`는 "오늘뭐했지"를 모듈화한 Codex plugin이다. Codex hook 이벤트를 로컬 JSONL로 쌓고, 등록한 별도 git repo로 하루치 기록을 push한다.
+
+`ejmhj`는 "어제뭐했지"를 모듈화한 리포트 생성 흐름이다.
 
 ## 원칙
 

@@ -96,6 +96,13 @@ function writeInternalLog(cfg, action, data = {}) {
   }
 }
 
+function errorDetails(err) {
+  return {
+    message: err && err.message ? err.message : String(err),
+    stack: err && err.stack ? String(err.stack) : '',
+  };
+}
+
 function readStdin() {
   return fs.readFileSync(0, 'utf8');
 }
@@ -151,38 +158,59 @@ function sanitizeEvent(event) {
 function hook(event) {
   const cfg = config();
   const raw = readStdin();
-  const input = readJsonFromString(raw, {});
-  const cwd = input.cwd || process.cwd();
-  const gitRoot = findGitRoot(cwd);
-  const now = new Date();
-  const ts = now.toISOString();
-  const record = {
-    ts,
-    tsUtc: ts,
-    timeZone: cfg.timeZone,
-    localDate: localDateKey(now, cfg.timeZone),
+  const parsed = parseJsonFromString(raw);
+  const input = parsed.value || {};
+  const rawBytes = Buffer.byteLength(raw);
+  writeInternalLog(cfg, 'hook_start', {
     event,
-    cwd,
-    gitRoot,
-    gitBranch: gitRoot ? gitValue(['branch', '--show-current'], gitRoot) : '',
-    sessionId: input.session_id || input.sessionId || '',
-    ...parsePrompt(input, cfg.promptMode),
-  };
-  appendLine(eventFile(cfg, utcDateKey(now)), JSON.stringify(record));
-  writeInternalLog(cfg, 'hook', {
-    event,
-    cwd,
-    gitRoot,
-    localDate: record.localDate,
-    sessionId: record.sessionId,
+    rawBytes,
+    inputJson: parsed.ok,
+    parseError: parsed.error || '',
   });
+  try {
+    const cwd = input.cwd || process.cwd();
+    const gitRoot = findGitRoot(cwd);
+    const now = new Date();
+    const ts = now.toISOString();
+    const record = {
+      ts,
+      tsUtc: ts,
+      timeZone: cfg.timeZone,
+      localDate: localDateKey(now, cfg.timeZone),
+      event,
+      cwd,
+      gitRoot,
+      gitBranch: gitRoot ? gitValue(['branch', '--show-current'], gitRoot) : '',
+      sessionId: input.session_id || input.sessionId || '',
+      ...parsePrompt(input, cfg.promptMode),
+    };
+    appendLine(eventFile(cfg, utcDateKey(now)), JSON.stringify(record));
+    writeInternalLog(cfg, 'hook_success', {
+      event,
+      cwd,
+      gitRoot,
+      localDate: record.localDate,
+      sessionId: record.sessionId,
+    });
+  } catch (err) {
+    writeInternalLog(cfg, 'hook_error', {
+      event,
+      ...errorDetails(err),
+    });
+    throw err;
+  }
 }
 
 function readJsonFromString(raw, fallback) {
+  const parsed = parseJsonFromString(raw);
+  return parsed.ok ? parsed.value : fallback;
+}
+
+function parseJsonFromString(raw) {
   try {
-    return JSON.parse(String(raw || '').replace(/^\uFEFF/, ''));
-  } catch {
-    return fallback;
+    return { ok: true, value: JSON.parse(String(raw || '').replace(/^\uFEFF/, '')) };
+  } catch (err) {
+    return { ok: false, value: null, error: err && err.message ? err.message : String(err) };
   }
 }
 
@@ -324,9 +352,11 @@ function status() {
   const cfg = config();
   const key = localDateKey(new Date(), cfg.timeZone);
   const events = loadEventsForLocalDate(cfg, key);
+  const logFile = internalLogFile(cfg);
   process.stdout.write([
     `config: ${CONFIG_PATH}`,
     `state: ${cfg.stateDir}`,
+    `internalLog: ${logFile}`,
     `repo: ${cfg.repoPath || '(not registered)'}`,
     `prompt: ${cfg.promptMode}`,
     `timeZone: ${cfg.timeZone}`,
@@ -360,7 +390,15 @@ function selftest() {
   if (daily.includes('redaction-fixture-value') || raw.includes('[REDACTION_FIXTURE]')) {
     throw new Error('secret redaction failed');
   }
-  if (!fs.existsSync(internalLogFile(config(), '2026-07-09'))) throw new Error('internal log missing');
+  const hookRun = childProcess.spawnSync(process.execPath, [__filename, 'hook', 'UserPromptSubmit'], {
+    env: { ...process.env, ONMHJ_CONFIG: CONFIG_PATH },
+    input: JSON.stringify({ cwd: repo, session_id: 'selftest', prompt: 'hook token=redaction-fixture-value' }),
+    encoding: 'utf8',
+  });
+  if (hookRun.status !== 0) throw new Error((hookRun.stderr || hookRun.stdout || 'hook selftest failed').trim());
+  const internal = fs.readFileSync(internalLogFile(config()), 'utf8');
+  if (!internal.includes('"action":"hook_start"')) throw new Error('hook_start log missing');
+  if (!internal.includes('"action":"hook_success"')) throw new Error('hook_success log missing');
   process.stdout.write('selftest ok\n');
 }
 
@@ -381,7 +419,7 @@ try {
   try {
     writeInternalLog(config(), 'error', {
       command: process.argv.slice(2).join(' '),
-      message: err && err.message ? err.message : String(err),
+      ...errorDetails(err),
     });
   } catch {}
   process.stderr.write((err && err.message ? err.message : String(err)) + '\n');

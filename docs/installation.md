@@ -106,6 +106,7 @@ Confirm events were captured:
 ```sh
 node /path/to/user/Documents/Github/onmhj/bin/onmhj.js status
 tail -n 5 ~/.local/state/onmhj/events/$(date -u +%F).jsonl
+tail -n 20 ~/.local/state/onmhj/internal/$(date -u +%F).jsonl
 ```
 
 Flush to the report repo:
@@ -128,6 +129,8 @@ daily/YYYY-MM-DD.md
 If `codex plugin marketplace add` says the root has no supported manifest, check that `.agents/plugins/marketplace.json` exists.
 
 If no events appear, open `/hooks`, trust the `onmhj` hooks, and start a new session. `SessionStart` only fires for new sessions.
+
+If internal logs are empty too, the plugin hook is not running. Reinstall or re-trust the plugin hooks, then start a new Codex session.
 
 If the hook cannot find Node, install Node or make sure the non-interactive shell used by Codex can resolve `node`.
 
