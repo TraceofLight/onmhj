@@ -641,7 +641,17 @@ function reportScheduleState(cfg, now = new Date()) {
   };
 }
 
-function shouldScheduleReportDate(date, state) {
+function hasValidReport(cfg, date) {
+  try {
+    validateReport(fs.readFileSync(path.join(cfg.repoPath, 'reports', date + '.md'), 'utf8'), date);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function shouldScheduleReportDate(cfg, date, state) {
+  if (!hasValidReport(cfg, date)) return true;
   if (!state.localConfirmedThrough || date > state.localConfirmedThrough) return true;
   return Boolean(state.remoteConfirmedFloor && date > state.remoteConfirmedFloor);
 }
@@ -653,7 +663,7 @@ function tryScheduleReportJobs(cfg, now = new Date(), opts = {}) {
   let count = 0;
   for (const date of localEventDates(cfg, state.throughDate)) {
     const current = readReportJob(cfg, date);
-    if (!shouldScheduleReportDate(date, state)) continue;
+    if (!shouldScheduleReportDate(cfg, date, state)) continue;
     const job = enqueueReportJob(cfg, date, { force: current && current.status === 'completed' });
     if (!job) continue;
     count += 1;
@@ -722,6 +732,81 @@ function loadEventsForLocalDate(cfg, date) {
     .filter(event => event.localDate === date || (!event.localDate && utcDateKey(new Date(event.ts)) === date))
     .map(sanitizeEvent)
     .sort((a, b) => String(a.tsUtc || a.ts).localeCompare(String(b.tsUtc || b.ts)));
+}
+
+const REPORT_SECTIONS = ['요약', '작업 이유', '작업 과정', '결정 사항', '도출 결과', '남은 일'];
+
+function buildReportPrompt(date, daily, raw) {
+  return [
+    `${date} 작업일의 최종보고서를 한국어 Markdown으로 작성하라.`,
+    '확인되지 않은 작업을 지어내지 말고 제공된 근거만 사용하라.',
+    `첫 줄은 정확히 \`# ${date} 어제 뭐 했지\`로 작성하라.`,
+    `필수 섹션을 순서대로 작성하라: ${REPORT_SECTIONS.map(section => `## ${section}`).join(', ')}`,
+    '확인된 내용이 없는 섹션에는 `- 확인된 내용 없음`을 작성하라.',
+    'Markdown 본문만 출력하라.',
+    '',
+    '--- daily evidence ---',
+    daily,
+    '--- normalized raw events ---',
+    raw,
+  ].join('\n');
+}
+
+function validateReport(value, date) {
+  const report = String(value || '').trim() + '\n';
+  if (!report.startsWith(`# ${date} 어제 뭐 했지\n`)) {
+    throw new Error(`report heading must match work date ${date}`);
+  }
+  for (const section of REPORT_SECTIONS) {
+    if (!report.includes(`\n## ${section}\n`)) throw new Error(`report missing section: ${section}`);
+  }
+  return report;
+}
+
+function runAgent(command, args, input) {
+  return childProcess.spawnSync(command, args, { input, encoding: 'utf8' });
+}
+
+async function requestApi(url, options, body) {
+  const response = await fetch(url, { ...options, body: JSON.stringify(body) });
+  const value = await response.json();
+  if (!response.ok) {
+    const message = value && value.error && value.error.message ? value.error.message : `HTTP ${response.status}`;
+    throw new Error(`report API failed: ${message}`);
+  }
+  return value;
+}
+
+async function generateReport(cfg, date, daily, raw, deps = {}) {
+  const prompt = buildReportPrompt(date, daily, raw);
+  let output;
+  if (cfg.reportAuth === 'api') {
+    if (!cfg.reportApiBaseUrl) throw new Error('report API base URL is required');
+    if (!cfg.reportApiModel) throw new Error('report API model is required');
+    const env = deps.env || process.env;
+    const apiKey = env[cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV];
+    if (!apiKey) throw new Error(`report API key is missing: ${cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV}`);
+    const callApi = deps.requestApi || requestApi;
+    const result = await callApi(
+      cfg.reportApiBaseUrl.replace(/\/$/, '') + '/chat/completions',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      },
+      { model: cfg.reportApiModel, messages: [{ role: 'user', content: prompt }] },
+    );
+    output = result && result.choices && result.choices[0] && result.choices[0].message
+      ? result.choices[0].message.content
+      : '';
+  } else {
+    const callAgent = deps.runAgent || runAgent;
+    const result = callAgent('codex', ['exec', '-'], prompt);
+    if (!result || result.status !== 0) {
+      throw new Error(`report agent failed: ${(result && (result.stderr || result.stdout)) || 'unknown error'}`.trim());
+    }
+    output = result.stdout;
+  }
+  return validateReport(output, date);
 }
 
 function reportLabels(language) {
@@ -803,63 +888,87 @@ function syncReportRepo(repoPath) {
   return true;
 }
 
+function prepareDaily(cfg, key, opts = {}) {
+  const pulled = opts.pull === false ? false : syncReportRepo(cfg.repoPath);
+  const rawTarget = path.join(cfg.repoPath, 'raw', 'ai-sessions', key + '.jsonl');
+  const dailyTarget = path.join(cfg.repoPath, 'daily', key + '.md');
+  const events = mergeEvents(loadEvents(rawTarget), loadEventsForLocalDate(cfg, key));
+  if (!events.length) return null;
+  fs.mkdirSync(path.dirname(rawTarget), { recursive: true });
+  fs.mkdirSync(path.dirname(dailyTarget), { recursive: true });
+  const raw = events.map(event => JSON.stringify(event)).join('\n') + '\n';
+  const daily = summarize(events, key, cfg.reportLanguage);
+  fs.writeFileSync(rawTarget, raw);
+  fs.writeFileSync(dailyTarget, daily);
+  return { daily, dailyTarget, eventCount: events.length, pulled, raw, rawTarget };
+}
+
+function commitArtifacts(cfg, key, targets, opts = {}) {
+  run('git', ['add', ...targets], cfg.repoPath);
+  const diff = run('git', ['diff', '--cached', '--quiet'], cfg.repoPath, true);
+  if (diff.status !== 0) run('git', ['commit', '-m', `log: ${key} AI worklog`], cfg.repoPath);
+  if (!opts.noPush) run('git', ['push'], cfg.repoPath);
+  return diff.status !== 0;
+}
+
 function flush(date, opts) {
   const cfg = config();
   if (!cfg.repoPath) throw new Error('run `onmhj register <git-repo-path>` first');
   if (!isGitRepo(cfg.repoPath)) throw new Error(`registered path is not a git repo: ${cfg.repoPath}`);
 
   const key = date || localDateKey(new Date(), cfg.timeZone);
-  const events = loadEventsForLocalDate(cfg, key);
-  if (!events.length) {
+  const prepared = prepareDaily(cfg, key);
+  if (!prepared) {
     writeInternalLog(cfg, 'flush_no_events', { date: key });
     process.stdout.write(`no events for ${key}\n`);
     return;
   }
-
-  const pulled = syncReportRepo(cfg.repoPath);
-  const rawTarget = path.join(cfg.repoPath, 'raw', 'ai-sessions', key + '.jsonl');
-  const dailyTarget = path.join(cfg.repoPath, 'daily', key + '.md');
-  fs.mkdirSync(path.dirname(rawTarget), { recursive: true });
-  fs.mkdirSync(path.dirname(dailyTarget), { recursive: true });
-  const merged = mergeEvents(loadEvents(rawTarget), events);
-  fs.writeFileSync(rawTarget, merged.map(event => JSON.stringify(event)).join('\n') + '\n');
-  fs.writeFileSync(dailyTarget, summarize(merged, key, cfg.reportLanguage));
-  const confirmTarget = opts.confirm ? writeDeviceConfirmation(cfg, key) : '';
-
-  run('git', ['add', rawTarget, dailyTarget, ...(confirmTarget ? [confirmTarget] : [])], cfg.repoPath);
-  const diff = run('git', ['diff', '--cached', '--quiet'], cfg.repoPath, true);
-  if (diff.status === 0) {
-    if (!opts.noPush) run('git', ['push'], cfg.repoPath);
-    writeInternalLog(cfg, 'flush_no_changes', {
-      date: key,
-      eventCount: merged.length,
-      localEventCount: events.length,
-      deviceId: cfg.deviceId,
-      confirmed: Boolean(opts.confirm),
-      pulled,
-      pushed: !opts.noPush,
-    });
-    process.stdout.write(`no git changes for ${key}\n`);
-    return;
-  }
-  run('git', ['commit', '-m', `log: ${key} AI worklog`], cfg.repoPath);
-  if (!opts.noPush) run('git', ['push'], cfg.repoPath);
+  const changed = commitArtifacts(cfg, key, [prepared.rawTarget, prepared.dailyTarget], opts);
   writeInternalLog(cfg, 'flush', {
     date: key,
-    eventCount: merged.length,
-    localEventCount: events.length,
+    eventCount: prepared.eventCount,
     deviceId: cfg.deviceId,
-    confirmed: Boolean(opts.confirm),
-    rawTarget,
-    dailyTarget,
-    confirmTarget,
-    pulled,
+    rawTarget: prepared.rawTarget,
+    dailyTarget: prepared.dailyTarget,
+    pulled: prepared.pulled,
     pushed: !opts.noPush,
   });
-  process.stdout.write(`flushed ${key}\n`);
+  process.stdout.write(`${changed ? 'flushed' : 'no git changes for'} ${key}\n`);
 }
 
-function runReportJob(cfg, date, opts = {}) {
+async function runFullReport(cfg, date, opts = {}) {
+  if (!cfg.repoPath) throw new Error('run `onmhj register <git-repo-path>` first');
+  if (!isGitRepo(cfg.repoPath)) throw new Error(`registered path is not a git repo: ${cfg.repoPath}`);
+  const prepared = prepareDaily(cfg, date);
+  if (!prepared) throw new Error(`no events for ${date}`);
+  const createReport = opts.generateReport || generateReport;
+  const report = validateReport(await createReport(cfg, date, prepared.daily, prepared.raw), date);
+  const reportTarget = path.join(cfg.repoPath, 'reports', date + '.md');
+  fs.mkdirSync(path.dirname(reportTarget), { recursive: true });
+  fs.writeFileSync(reportTarget, report);
+  const confirmTarget = writeDeviceConfirmation(cfg, date);
+  commitArtifacts(
+    cfg,
+    date,
+    [prepared.rawTarget, prepared.dailyTarget, reportTarget, confirmTarget],
+    opts,
+  );
+  writeLocalConfirmation(cfg, date);
+  writeInternalLog(cfg, 'report', {
+    date,
+    eventCount: prepared.eventCount,
+    rawTarget: prepared.rawTarget,
+    dailyTarget: prepared.dailyTarget,
+    reportTarget,
+    confirmTarget,
+    pulled: prepared.pulled,
+    pushed: !opts.noPush,
+  });
+  process.stdout.write(`reported ${date}\n`);
+  return reportTarget;
+}
+
+async function runReportJob(cfg, date, opts = {}) {
   const lock = reportJobLockFile(cfg, date);
   if (!acquireLock(lock)) return false;
   try {
@@ -875,8 +984,7 @@ function runReportJob(cfg, date, opts = {}) {
       lastStartedAt: now,
     });
     try {
-      flush(date, { confirm: true, noPush: opts.noPush });
-      writeLocalConfirmation(cfg, date);
+      await runFullReport(cfg, date, opts);
       writeReportJob(cfg, {
         ...readReportJob(cfg, date),
         date,
@@ -905,7 +1013,7 @@ function runReportJob(cfg, date, opts = {}) {
   }
 }
 
-function processReportJobs(cfg) {
+async function processReportJobs(cfg) {
   try {
     if (cfg.repoPath && isGitRepo(cfg.repoPath)) syncReportRepo(cfg.repoPath);
   } catch (err) {
@@ -921,7 +1029,7 @@ function processReportJobs(cfg) {
     if (!Number.isNaN(due) && due > now) {
       break;
     }
-    if (!runReportJob(cfg, job.date)) break;
+    if (!await runReportJob(cfg, job.date)) break;
   }
   for (const job of listReportJobs(cfg)) {
     if (job.status === 'completed') continue;
@@ -931,7 +1039,7 @@ function processReportJobs(cfg) {
   return 0;
 }
 
-function worker() {
+async function worker() {
   const cfg = config();
   const lock = workerLockFile(cfg);
   if (!acquireLock(lock)) {
@@ -939,8 +1047,8 @@ function worker() {
     return;
   }
   writeInternalLog(cfg, 'worker_start');
-  const tick = () => {
-    const nextDelay = processReportJobs(cfg);
+  const tick = async () => {
+    const nextDelay = await processReportJobs(cfg);
     if (nextDelay) {
       writeInternalLog(cfg, 'worker_sleep', { nextDelayMs: nextDelay });
       setTimeout(tick, nextDelay);
@@ -1128,7 +1236,7 @@ function selftest() {
   }
 }
 
-function main() {
+async function main() {
   const [cmd, first, ...rest] = process.argv.slice(2);
   const opts = parseOptions([first, ...rest].filter(Boolean));
   if (cmd === 'hook') return hook(first || 'unknown');
@@ -1137,7 +1245,7 @@ function main() {
   if (cmd === 'inject') return inject(opts);
   if (cmd === 'import') return importEvents(first);
   if (cmd === 'flush') return flush(first && !first.startsWith('--') ? first : undefined, opts);
-  if (cmd === 'ejmhj') return flush(first && !first.startsWith('--') ? first : previousLocalDateKey(new Date(), config().timeZone), opts);
+  if (cmd === 'ejmhj') return runFullReport(config(), first && !first.startsWith('--') ? first : previousLocalDateKey(new Date(), config().timeZone), opts);
   if (cmd === 'worker') return worker();
   if (cmd === 'status') return status();
   if (cmd === 'selftest') return selftest();
@@ -1149,17 +1257,19 @@ function setConfigPath(file) {
 }
 
 module.exports = {
+  buildReportPrompt,
   config,
+  generateReport,
   readReportJob,
   reportScheduleState,
+  runFullReport,
   setConfigPath,
   tryScheduleReportJobs,
+  validateReport,
 };
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (err) {
+  main().catch(err => {
     try {
       writeInternalLog(config(), 'error', {
         command: process.argv.slice(2).join(' '),
@@ -1169,5 +1279,5 @@ if (require.main === module) {
     if (process.argv[2] === 'hook') process.exit(0);
     process.stderr.write((err && err.message ? err.message : String(err)) + '\n');
     process.exit(1);
-  }
+  });
 }

@@ -64,3 +64,32 @@ test('report schedule state accepts injected time', () => {
   assert.equal(state.localConfirmedThrough, '');
   assert.equal(state.remoteConfirmedFloor, '');
 });
+
+test('requeues a completed date when its final report is missing', () => {
+  const cfg = createConfig();
+  appendEvent(cfg.stateDir, '2026-07-09', {
+    tsUtc: '2026-07-09T01:00:00.000Z',
+    localDate: '2026-07-09',
+    event: 'UserPromptSubmit',
+    deviceId: cfg.deviceId,
+  });
+  writeJson(path.join(cfg.stateDir, 'jobs', 'reports', 'confirmed.json'), {
+    deviceId: cfg.deviceId,
+    confirmedThrough: '2026-07-09',
+  });
+  writeJson(path.join(cfg.stateDir, 'jobs', 'reports', '2026-07-09.json'), {
+    date: '2026-07-09',
+    status: 'completed',
+    attempts: 1,
+  });
+
+  onmhj.setConfigPath(cfg.configPath);
+  const queued = onmhj.tryScheduleReportJobs(
+    onmhj.config(),
+    new Date('2026-07-10T01:00:00.000Z'),
+    { spawn: false },
+  );
+
+  assert.equal(queued, true);
+  assert.equal(onmhj.readReportJob(onmhj.config(), '2026-07-09').status, 'pending');
+});
