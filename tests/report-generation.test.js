@@ -108,8 +108,24 @@ test('generates a validated report with Codex agent auth', async () => {
   );
 
   assert.equal(report, validReport());
-  assert.equal(invocation.command, 'codex');
-  assert.deepEqual(invocation.args, ['exec', '-']);
+  if (process.platform === 'win32') {
+    assert.equal(invocation.command, 'cmd.exe');
+    assert.deepEqual(invocation.args, [
+      '/d',
+      '/s',
+      '/c',
+      'codex.cmd exec --ignore-user-config --ephemeral --skip-git-repo-check -',
+    ]);
+  } else {
+    assert.equal(invocation.command, 'codex');
+    assert.deepEqual(invocation.args, [
+      'exec',
+      '--ignore-user-config',
+      '--ephemeral',
+      '--skip-git-repo-check',
+      '-',
+    ]);
+  }
   assert.match(invocation.input, /daily evidence/);
 });
 
@@ -148,6 +164,22 @@ test('rejects incomplete API configuration before requesting a report', async ()
   );
 });
 
+test('reports non-JSON API gateway failures clearly', async () => {
+  await assert.rejects(
+    () => onmhj.requestApi(
+      'https://llm.example/v1/chat/completions',
+      { method: 'POST' },
+      { model: 'report-model' },
+      async () => ({
+        ok: false,
+        status: 504,
+        text: async () => 'Gateway Timeout',
+      }),
+    ),
+    /HTTP 504: Gateway Timeout/,
+  );
+});
+
 test('surfaces Codex report generation failures', async () => {
   await assert.rejects(
     () => onmhj.generateReport(
@@ -158,6 +190,19 @@ test('surfaces Codex report generation failures', async () => {
       { runAgent: () => ({ status: 1, stdout: '', stderr: 'agent failed' }) },
     ),
     /agent failed/,
+  );
+});
+
+test('surfaces Codex process launch errors', async () => {
+  await assert.rejects(
+    () => onmhj.generateReport(
+      { reportAuth: 'agent' },
+      date,
+      'daily',
+      'raw',
+      { runAgent: () => ({ status: null, error: new Error('spawn denied') }) },
+    ),
+    /spawn denied/,
   );
 });
 

@@ -1,7 +1,7 @@
 {
   "name": "onmhj",
-  "version": "0.1.11",
-  "description": "Local AI-session worklog capture with ordered confirmed-date retries.",
+  "version": "0.1.12",
+  "description": "Local AI-session capture with automatic final reports and ordered retries.",
   "author": {
     "name": "onmhj maintainers"
   },

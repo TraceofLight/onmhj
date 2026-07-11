@@ -779,9 +779,16 @@ function runAgent(command, args, input) {
   return childProcess.spawnSync(command, args, { input, encoding: 'utf8' });
 }
 
-async function requestApi(url, options, body) {
-  const response = await fetch(url, { ...options, body: JSON.stringify(body) });
-  const value = await response.json();
+async function requestApi(url, options, body, fetchImpl = fetch) {
+  const response = await fetchImpl(url, { ...options, body: JSON.stringify(body) });
+  const text = await response.text();
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    if (!response.ok) throw new Error(`report API failed: HTTP ${response.status}: ${text || 'empty response'}`);
+    throw new Error('report API returned invalid JSON');
+  }
   if (!response.ok) {
     const message = value && value.error && value.error.message ? value.error.message : `HTTP ${response.status}`;
     throw new Error(`report API failed: ${message}`);
@@ -812,9 +819,14 @@ async function generateReport(cfg, date, daily, raw, deps = {}) {
       : '';
   } else {
     const callAgent = deps.runAgent || runAgent;
-    const result = callAgent('codex', ['exec', '-'], prompt);
+    const command = process.platform === 'win32' ? 'cmd.exe' : 'codex';
+    const args = process.platform === 'win32'
+      ? ['/d', '/s', '/c', 'codex.cmd exec --ignore-user-config --ephemeral --skip-git-repo-check -']
+      : ['exec', '--ignore-user-config', '--ephemeral', '--skip-git-repo-check', '-'];
+    const result = callAgent(command, args, prompt);
     if (!result || result.status !== 0) {
-      throw new Error(`report agent failed: ${(result && (result.stderr || result.stdout)) || 'unknown error'}`.trim());
+      const detail = result && (result.stderr || result.stdout || (result.error && result.error.message));
+      throw new Error(`report agent failed: ${detail || 'unknown error'}`.trim());
     }
     output = result.stdout;
   }
@@ -1277,6 +1289,7 @@ module.exports = {
   buildReportPrompt,
   config,
   generateReport,
+  requestApi,
   readReportJob,
   reportScheduleState,
   runFullReport,
