@@ -77,7 +77,7 @@ No ACK command is added.
 - A completed job with a missing or invalid report is requeued automatically.
 - Existing historical reports remain untouched unless their date is explicitly processed or found incomplete.
 - Historical duplicate `daily` and `reports` files are not bulk-migrated in this change.
-- The existing ordered retry and multi-device merge behavior remains.
+- Ordered retry and multi-device merge remain. Each device catches up its own local events; a slower device watermark does not regenerate another device's valid report.
 
 ## Verification
 

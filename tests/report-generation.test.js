@@ -10,7 +10,11 @@ const onmhj = require('../bin/onmhj.js');
 const date = '2026-07-11';
 
 function validReport() {
-  return `# ${date} 어제 뭐 했지
+  return validReportFor(date);
+}
+
+function validReportFor(reportDate) {
+  return `# ${reportDate} 어제 뭐 했지
 
 ## 요약
 완료 작업 요약
@@ -43,6 +47,10 @@ function createRuntime() {
   fs.writeFileSync(path.join(repoPath, 'README.md'), '# test\n');
   childProcess.execFileSync('git', ['add', 'README.md'], { cwd: repoPath });
   childProcess.execFileSync('git', ['commit', '-m', 'init'], { cwd: repoPath, stdio: 'ignore' });
+  const remotePath = path.join(tmp, 'remote.git');
+  childProcess.execFileSync('git', ['init', '--bare', remotePath], { stdio: 'ignore' });
+  childProcess.execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: repoPath });
+  childProcess.execFileSync('git', ['push', '-u', 'origin', 'master'], { cwd: repoPath, stdio: 'ignore' });
   fs.mkdirSync(path.join(stateDir, 'events'), { recursive: true });
   fs.writeFileSync(path.join(stateDir, 'events', `${date}.jsonl`), JSON.stringify({
     tsUtc: `${date}T01:00:00.000Z`,
@@ -72,6 +80,8 @@ test('builds a final-report prompt for the work date and evidence', () => {
   assert.match(prompt, /UserPromptSubmit/);
   assert.match(prompt, /## 작업 이유/);
   assert.match(prompt, /확인되지 않은 작업을 지어내지/);
+  assert.match(prompt, /신뢰할 수 없는 데이터/);
+  assert.match(prompt, /도구를 사용하지/);
 });
 
 test('accepts a report with the exact work-date heading and required sections', () => {
@@ -92,6 +102,49 @@ test('rejects a report missing a required section', () => {
   );
 });
 
+test('rejects duplicated or out-of-order report sections', () => {
+  assert.throws(
+    () => onmhj.validateReport(validReport().replace('## 남은 일', '## 요약\n중복\n\n## 남은 일'), date),
+    /duplicate|order/,
+  );
+  assert.throws(
+    () => onmhj.validateReport(
+      validReport().replace('## 작업 이유', '## TEMP').replace('## 작업 과정', '## 작업 이유').replace('## TEMP', '## 작업 과정'),
+      date,
+    ),
+    /order/,
+  );
+});
+
+test('builds and validates the English final-report contract', () => {
+  const report = `# ${date} Yesterday's work
+
+## Summary
+- completed
+
+## Work reasons
+- needed
+
+## Work process
+- implemented
+
+## Decisions
+- retained contract
+
+## Results
+- verified
+
+## Remaining work
+- none
+`;
+  const prompt = onmhj.buildReportPrompt(date, 'daily', 'raw', 'en');
+
+  assert.match(prompt, /Yesterday's work/);
+  assert.match(prompt, /## Work reasons/);
+  assert.equal(onmhj.validateReport(report, date, 'en'), report);
+  assert.throws(() => onmhj.validateReport(validReport(), date, 'en'), /heading/);
+});
+
 test('generates a validated report with Codex agent auth', async () => {
   let invocation;
   const report = await onmhj.generateReport(
@@ -100,33 +153,45 @@ test('generates a validated report with Codex agent auth', async () => {
     '# daily evidence',
     '{"event":"UserPromptSubmit"}\n',
     {
-      runAgent(command, args, input) {
-        invocation = { command, args, input };
+      codexCommand: 'codex-native',
+      runAgent(command, args, input, options) {
+        invocation = { command, args, input, options };
         return { status: 0, stdout: validReport(), stderr: '' };
       },
     },
   );
 
   assert.equal(report, validReport());
-  if (process.platform === 'win32') {
-    assert.equal(invocation.command, 'cmd.exe');
-    assert.deepEqual(invocation.args, [
-      '/d',
-      '/s',
-      '/c',
-      'codex.cmd exec --ignore-user-config --ephemeral --skip-git-repo-check -',
-    ]);
-  } else {
-    assert.equal(invocation.command, 'codex');
-    assert.deepEqual(invocation.args, [
-      'exec',
-      '--ignore-user-config',
-      '--ephemeral',
-      '--skip-git-repo-check',
-      '-',
-    ]);
-  }
+  assert.equal(invocation.command, 'codex-native');
+  assert.deepEqual(invocation.args, [
+    'exec',
+    '--ignore-user-config',
+    '--ignore-rules',
+    '--ephemeral',
+    '--skip-git-repo-check',
+    '--sandbox',
+    'read-only',
+    '--disable',
+    'shell_tool',
+    '--disable',
+    'unified_exec',
+    '--disable',
+    'multi_agent',
+    '--disable',
+    'apps',
+    '--disable',
+    'hooks',
+    '--disable',
+    'goals',
+    '-c',
+    'tools.view_image=false',
+    '-c',
+    'tools.web_search=false',
+    '-',
+  ]);
   assert.match(invocation.input, /daily evidence/);
+  assert.ok(invocation.options.timeout > 0);
+  assert.equal(fs.existsSync(invocation.options.cwd), false);
 });
 
 test('generates a validated report with OpenAI-compatible API auth', async () => {
@@ -153,6 +218,7 @@ test('generates a validated report with OpenAI-compatible API auth', async () =>
   assert.equal(report, validReport());
   assert.equal(request.url, 'https://llm.example/v1/chat/completions');
   assert.equal(request.options.headers.Authorization, 'Bearer secret-value');
+  assert.ok(request.options.signal instanceof AbortSignal);
   assert.equal(request.body.model, 'report-model');
   assert.match(request.body.messages[0].content, /daily evidence/);
 });
@@ -206,11 +272,28 @@ test('surfaces Codex process launch errors', async () => {
   );
 });
 
+test('redacts credential-like values from generated reports', async () => {
+  const generated = validReport().replace('검증 완료', 'token=super-secret-report-value 검증 완료');
+
+  const report = await onmhj.generateReport(
+    { reportAuth: 'agent', reportLanguage: 'ko' },
+    date,
+    'daily',
+    'raw',
+    {
+      codexCommand: 'codex-native',
+      runAgent: () => ({ status: 0, stdout: generated, stderr: '' }),
+    },
+  );
+
+  assert.doesNotMatch(report, /super-secret-report-value/);
+  assert.match(report, /\[REDACTED\]/);
+});
+
 test('full pipeline commits raw, daily, report, and confirmation for the same work date', async () => {
   const cfg = createRuntime();
 
   await onmhj.runFullReport(cfg, date, {
-    noPush: true,
     generateReport: async () => validReport(),
   });
 
@@ -243,4 +326,137 @@ test('report generation failure does not write confirmation', async () => {
 
   assert.equal(fs.existsSync(path.join(cfg.repoPath, 'state', 'devices', 'test-device.json')), false);
   assert.equal(fs.existsSync(path.join(cfg.stateDir, 'jobs', 'reports', 'confirmed.json')), false);
+});
+
+test('no-push report generation does not confirm the work date', async () => {
+  const cfg = createRuntime();
+
+  await onmhj.runFullReport(cfg, date, {
+    noPush: true,
+    generateReport: async () => validReport(),
+  });
+
+  assert.ok(fs.existsSync(path.join(cfg.repoPath, 'reports', `${date}.md`)));
+  assert.equal(fs.existsSync(path.join(cfg.repoPath, 'state', 'devices', 'test-device.json')), false);
+  assert.equal(fs.existsSync(path.join(cfg.stateDir, 'jobs', 'reports', 'confirmed.json')), false);
+});
+
+test('refuses to publish a report over unrelated staged changes', async () => {
+  const cfg = createRuntime();
+  const unrelated = path.join(cfg.repoPath, 'unrelated.txt');
+  fs.writeFileSync(unrelated, 'user change\n');
+  childProcess.execFileSync('git', ['add', 'unrelated.txt'], { cwd: cfg.repoPath });
+
+  await assert.rejects(
+    () => onmhj.runFullReport(cfg, date, { generateReport: async () => validReport() }),
+    /staged changes/,
+  );
+
+  assert.equal(
+    childProcess.execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: cfg.repoPath, encoding: 'utf8' }).trim(),
+    'unrelated.txt',
+  );
+});
+
+test('refuses concurrent publication while the report repo lock is held', async () => {
+  const cfg = createRuntime();
+  const lock = path.join(cfg.stateDir, 'jobs', 'reports', 'publication.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }));
+
+  await assert.rejects(
+    () => onmhj.runFullReport(cfg, date, { generateReport: async () => validReport() }),
+    /publication already running/,
+  );
+});
+
+test('worker waits without failing jobs while another publication holds the repo lock', async () => {
+  const cfg = createRuntime();
+  const jobsDir = path.join(cfg.stateDir, 'jobs', 'reports');
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const jobFile = path.join(jobsDir, `${date}.json`);
+  fs.writeFileSync(jobFile, JSON.stringify({
+    date,
+    status: 'pending',
+    attempts: 0,
+    createdAt: '2026-07-11T00:00:00.000Z',
+    nextAttemptAt: '2000-01-01T00:00:00.000Z',
+  }));
+  fs.writeFileSync(path.join(jobsDir, 'publication.lock'), JSON.stringify({
+    pid: process.pid,
+    ts: new Date().toISOString(),
+  }));
+
+  const delay = await onmhj.processReportJobs(cfg, {
+    generateReport: async () => validReport(),
+  });
+
+  assert.ok(delay > 0 && delay <= 1000);
+  const job = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
+  assert.equal(job.status, 'pending');
+  assert.equal(job.attempts, 0);
+});
+
+test('ejmhj preserves ordered retries before confirming a later work date', async () => {
+  const cfg = createRuntime();
+  const earlierDate = '2026-07-10';
+  fs.writeFileSync(path.join(cfg.stateDir, 'events', `${earlierDate}.jsonl`), JSON.stringify({
+    tsUtc: `${earlierDate}T01:00:00.000Z`,
+    localDate: earlierDate,
+    timeZone: 'Asia/Seoul',
+    deviceId: cfg.deviceId,
+    event: 'UserPromptSubmit',
+    cwd: cfg.repoPath,
+    promptPreview: 'earlier work',
+  }) + '\n');
+  const jobsDir = path.join(cfg.stateDir, 'jobs', 'reports');
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const earlierJobFile = path.join(jobsDir, `${earlierDate}.json`);
+  fs.writeFileSync(earlierJobFile, JSON.stringify({
+    date: earlierDate,
+    status: 'failed',
+    attempts: 1,
+    createdAt: '2026-07-10T00:00:00.000Z',
+    nextAttemptAt: '2999-01-01T00:00:00.000Z',
+  }));
+  const options = {
+    generateReport: async (_cfg, workDate) => validReportFor(workDate),
+    spawn: false,
+  };
+
+  const delay = await onmhj.runEjmhj(cfg, date, options);
+
+  assert.ok(delay > 0);
+  assert.equal(fs.existsSync(path.join(cfg.repoPath, 'reports', `${date}.md`)), false);
+  assert.equal(fs.existsSync(path.join(jobsDir, 'confirmed.json')), false);
+
+  const earlierJob = JSON.parse(fs.readFileSync(earlierJobFile, 'utf8'));
+  earlierJob.nextAttemptAt = '2000-01-01T00:00:00.000Z';
+  fs.writeFileSync(earlierJobFile, JSON.stringify(earlierJob));
+  await onmhj.runEjmhj(cfg, date, options);
+
+  assert.ok(fs.existsSync(path.join(cfg.repoPath, 'reports', `${earlierDate}.md`)));
+  assert.ok(fs.existsSync(path.join(cfg.repoPath, 'reports', `${date}.md`)));
+  const confirmed = JSON.parse(fs.readFileSync(path.join(jobsDir, 'confirmed.json'), 'utf8'));
+  assert.equal(confirmed.confirmedThrough, date);
+});
+
+test('regenerating an older report does not move confirmation backward', async () => {
+  const cfg = createRuntime();
+  const confirmationFile = path.join(cfg.stateDir, 'jobs', 'reports', 'confirmed.json');
+  fs.mkdirSync(path.dirname(confirmationFile), { recursive: true });
+  fs.writeFileSync(confirmationFile, JSON.stringify({
+    deviceId: cfg.deviceId,
+    confirmedThrough: '2026-07-12',
+  }));
+
+  await onmhj.runFullReport(cfg, date, { generateReport: async () => validReport() });
+
+  const local = JSON.parse(fs.readFileSync(confirmationFile, 'utf8'));
+  const remote = JSON.parse(fs.readFileSync(
+    path.join(cfg.repoPath, 'state', 'devices', `${cfg.deviceId}.json`),
+    'utf8',
+  ));
+  assert.equal(local.confirmedThrough, '2026-07-12');
+  assert.equal(remote.confirmedThrough, '2026-07-12');
 });

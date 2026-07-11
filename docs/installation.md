@@ -99,7 +99,7 @@ Automatic final report generation uses local Codex authentication by default:
 node /path/to/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent
 ```
 
-`report-lang` controls generated markdown language. It defaults from the user's locale when unset. Agent mode runs `codex exec` non-interactively. Prompt templates and plugin command text stay in English.
+`report-lang` controls both deterministic daily labels and the final report contract (`ko` or `en`). It defaults from the user's locale when unset. Agent mode runs the native Codex executable non-interactively with model tools disabled, an isolated read-only workspace, and a bounded timeout. On Windows, install Codex CLI with npm or set `ONMHJ_CODEX_EXECUTABLE` to the native binary. Prompt templates and plugin command text stay in English.
 
 Use OpenAI-compatible API settings only for explicit bulk backfill jobs:
 
@@ -202,7 +202,7 @@ daily/YYYY-MM-DD.md
 reports/YYYY-MM-DD.md
 ```
 
-`flush` publishes raw and daily evidence only. `ejmhj` and automatic report jobs also generate the final report and confirm the work date. A missing or invalid final report is retried even when an older job says it completed. Commands commit and push unless `--no-push` is passed.
+`flush` publishes raw and daily evidence only. `ejmhj` and automatic report jobs also generate the final report and confirm the work date. A missing or invalid final report is retried even when an older job says it completed. Commands commit and push unless `--no-push` is passed; `--no-push` never advances confirmation. Publication stops when the report repo already contains staged changes.
 
 ## Troubleshooting
 

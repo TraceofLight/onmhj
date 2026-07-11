@@ -65,7 +65,7 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 
 ![onmhj workflow](./docs/assets/workflow.svg)
 
-`confirmedThrough` advances only in date order. If an earlier report is waiting for retry, later jobs stay pending. If another device later exposes an older `confirmedThrough`, the floor drops and affected dates are queued again.
+`confirmedThrough` advances only in date order for each device. If an earlier report is waiting for retry, later jobs stay pending. A slower device catches up from its own local events; its older watermark does not regenerate another device's already valid final reports.
 
 ## Commands
 
@@ -125,6 +125,8 @@ Report repo:
 
 A date is confirmed only after its final report passes validation and raw, daily, report, and device confirmation are committed successfully. Completed jobs with a missing or invalid report are queued again automatically.
 
+`--no-push` generates and commits raw, daily, and final report artifacts without writing confirmation. Normal `ejmhj` uses the ordered job queue, so a later date cannot bypass an earlier retry and confirmation never moves backward.
+
 ## Safety
 
 - Hooks append locally only.
@@ -132,4 +134,6 @@ A date is confirmed only after its final report passes validation and raw, daily
 - `flush`/worker pulls before writing; direct report-repo edits and custom backfills must do the same manually.
 - Prompt capture defaults to `preview`; use `full` or `off` as needed.
 - Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
+- Agent reports run through the native Codex executable with a timeout in an empty read-only workspace. Shell, unified exec, apps, multi-agent, hooks, goals, image, and web tools are disabled; evidence is treated as untrusted data.
+- Automatic publication refuses to run when the report repository already has staged changes and uses a repository-wide publication lock.
 - Local report dates use the configured timezone; event spool filenames use UTC.
