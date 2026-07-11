@@ -93,13 +93,13 @@ node /path/to/onmhj/bin/onmhj.js config \
   --owner-email=you@example.com
 ```
 
-Daily `ejmhj` report generation should use the active Codex or Claude Code session auth by default:
+Automatic final report generation uses local Codex authentication by default:
 
 ```sh
 node /path/to/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent
 ```
 
-`report-lang` controls generated markdown language. It defaults from the user's locale when unset. Prompt templates and plugin command text stay in English.
+`report-lang` controls generated markdown language. It defaults from the user's locale when unset. Agent mode runs `codex exec` non-interactively. Prompt templates and plugin command text stay in English.
 
 Use OpenAI-compatible API settings only for explicit bulk backfill jobs:
 
@@ -199,9 +199,10 @@ Expected outputs in the report repo:
 ```txt
 raw/ai-sessions/YYYY-MM-DD.jsonl
 daily/YYYY-MM-DD.md
+reports/YYYY-MM-DD.md
 ```
 
-`flush` commits and pushes unless `--no-push` is passed.
+`flush` publishes raw and daily evidence only. `ejmhj` and automatic report jobs also generate the final report and confirm the work date. A missing or invalid final report is retried even when an older job says it completed. Commands commit and push unless `--no-push` is passed.
 
 ## Troubleshooting
 

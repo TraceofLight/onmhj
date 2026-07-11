@@ -563,6 +563,18 @@ function localEventDates(cfg, throughDate) {
   return [...dates].sort();
 }
 
+function reportCandidateDates(cfg, throughDate) {
+  const dates = new Set(localEventDates(cfg, throughDate));
+  const rawDir = path.join(cfg.repoPath, 'raw', 'ai-sessions');
+  try {
+    for (const file of fs.readdirSync(rawDir)) {
+      const match = /^(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(file);
+      if (match && match[1] <= throughDate) dates.add(match[1]);
+    }
+  } catch {}
+  return [...dates].sort();
+}
+
 function listReportJobs(cfg) {
   try {
     return fs.readdirSync(reportJobsDir(cfg))
@@ -661,7 +673,7 @@ function tryScheduleReportJobs(cfg, now = new Date(), opts = {}) {
   // The floor is intentionally the minimum across devices; a late device can
   // lower it so merged reports are regenerated from the earliest uncertain day.
   let count = 0;
-  for (const date of localEventDates(cfg, state.throughDate)) {
+  for (const date of reportCandidateDates(cfg, state.throughDate)) {
     const current = readReportJob(cfg, date);
     if (!shouldScheduleReportDate(cfg, date, state)) continue;
     const job = enqueueReportJob(cfg, date, { force: current && current.status === 'completed' });
@@ -1093,7 +1105,7 @@ function status() {
   ].join('\n') + '\n');
 }
 
-function selftest() {
+async function selftest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-'));
   const originalConfigPath = CONFIG_PATH;
   CONFIG_PATH = path.join(tmp, 'config.json');
@@ -1152,8 +1164,13 @@ function selftest() {
   if (!queuedDates.includes('2026-07-09') || !queuedDates.includes('2026-07-10')) {
     throw new Error('unconfirmed report dates were not queued');
   }
-  runReportJob(config(), '2026-07-09', { noPush: true });
-  runReportJob(config(), '2026-07-10', { noPush: true });
+  const createSelftestReport = async (_cfg, date) => validateReport([
+    `# ${date} 어제 뭐 했지`,
+    '',
+    ...REPORT_SECTIONS.flatMap(section => [`## ${section}`, '- selftest', '']),
+  ].join('\n'), date);
+  await runReportJob(config(), '2026-07-09', { noPush: true, generateReport: createSelftestReport });
+  await runReportJob(config(), '2026-07-10', { noPush: true, generateReport: createSelftestReport });
   const job = readReportJob(config(), '2026-07-09');
   if (!job || job.status !== 'completed') throw new Error('report job did not complete');
   const confirmed = readLocalConfirmation(config()).confirmedThrough;
@@ -1174,7 +1191,7 @@ function selftest() {
     status: 'failed',
     nextAttemptAt: '2999-01-01T00:00:00.000Z',
   });
-  const blockedDelay = processReportJobs(config());
+  const blockedDelay = await processReportJobs(config());
   const blockedNextJob = readReportJob(config(), '2026-07-10');
   if (blockedDelay <= 0) throw new Error('worker did not wait for earliest retry');
   if (!blockedNextJob || blockedNextJob.status !== 'pending' || blockedNextJob.attempts !== 1) {

@@ -93,3 +93,29 @@ test('requeues a completed date when its final report is missing', () => {
   assert.equal(queued, true);
   assert.equal(onmhj.readReportJob(onmhj.config(), '2026-07-09').status, 'pending');
 });
+
+test('queues a missing report from stored raw events without a local spool', () => {
+  const cfg = createConfig();
+  const rawFile = path.join(cfg.repoPath, 'raw', 'ai-sessions', '2026-07-09.jsonl');
+  fs.mkdirSync(path.dirname(rawFile), { recursive: true });
+  fs.writeFileSync(rawFile, JSON.stringify({
+    tsUtc: '2026-07-09T01:00:00.000Z',
+    localDate: '2026-07-09',
+    event: 'UserPromptSubmit',
+    deviceId: 'other-device',
+  }) + '\n');
+  writeJson(path.join(cfg.stateDir, 'jobs', 'reports', 'confirmed.json'), {
+    deviceId: cfg.deviceId,
+    confirmedThrough: '2026-07-09',
+  });
+
+  onmhj.setConfigPath(cfg.configPath);
+  const queued = onmhj.tryScheduleReportJobs(
+    onmhj.config(),
+    new Date('2026-07-10T01:00:00.000Z'),
+    { spawn: false },
+  );
+
+  assert.equal(queued, true);
+  assert.equal(onmhj.readReportJob(onmhj.config(), '2026-07-09').status, 'pending');
+});

@@ -9,10 +9,11 @@ AI-session worklog capture for Codex and Claude Code.
 ## Why
 
 - Local-first hooks: session events append to local JSONL, not directly to git.
-- Git-backed history: `flush` writes raw JSONL and daily Markdown into a separate report repo.
+- Git-backed history: `flush` writes raw JSONL and deterministic daily Markdown into a separate report repo.
+- Automatic final reports: report jobs turn daily evidence into `reports/YYYY-MM-DD.md` through Codex or an OpenAI-compatible API.
 - Multi-device safe: each computer has a `deviceId`; existing raw logs are pulled, merged, and deduped.
 - Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.
-- Agent auth by default: daily report generation uses the active Codex/Claude Code auth unless API mode is explicitly enabled.
+- Agent auth by default: final report generation uses local Codex authentication unless API mode is explicitly enabled.
 
 ## Install
 
@@ -73,8 +74,8 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj register <repo>` | Set the external report repo. |
 | `onmhj config ...` | Update timezone, device id, owner, language, auth, and API settings. |
 | `onmhj status` | Show config, local event count, confirmed floor, and job counts. |
-| `onmhj flush [date]` | Merge local/report events, regenerate daily Markdown, commit, and push. |
-| `onmhj ejmhj [date]` | Flush yesterday in the configured timezone, or the specified date. |
+| `onmhj flush [date]` | Merge events and publish raw/daily evidence without confirming the date. |
+| `onmhj ejmhj [date]` | Publish raw/daily/final report for yesterday or the specified work date. |
 | `onmhj inject --text=...` | Add one normalized manual event. |
 | `onmhj import <events.jsonl>` | Bulk import normalized JSONL events. |
 | `onmhj worker` | Process pending report jobs in the background. |
@@ -118,8 +119,11 @@ Local machine:
 Report repo:
 
 - raw events: `raw/ai-sessions/YYYY-MM-DD.jsonl`
-- daily report: `daily/YYYY-MM-DD.md`
+- daily evidence: `daily/YYYY-MM-DD.md`
+- final report: `reports/YYYY-MM-DD.md`
 - device confirmations: `state/devices/DEVICE_ID.json`
+
+A date is confirmed only after its final report passes validation and raw, daily, report, and device confirmation are committed successfully. Completed jobs with a missing or invalid report are queued again automatically.
 
 ## Safety
 
