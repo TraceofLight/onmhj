@@ -74,9 +74,12 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj config ...` | Update timezone, device id, owner, language, auth, and API settings. |
 | `onmhj status` | Show config, local event count, confirmed floor, and job counts. |
 | `onmhj flush [date]` | Merge local/report events, regenerate daily Markdown, commit, and push. |
+| `onmhj ejmhj [date]` | Flush yesterday in the configured timezone, or the specified date. |
 | `onmhj inject --text=...` | Add one normalized manual event. |
 | `onmhj import <events.jsonl>` | Bulk import normalized JSONL events. |
 | `onmhj worker` | Process pending report jobs in the background. |
+
+The Codex/Claude plugin also exposes `/onmhj ...` and `/ejmhj [date]` command prompts that delegate to these CLI commands.
 
 ## Backfill
 

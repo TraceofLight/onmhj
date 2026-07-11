@@ -6,7 +6,7 @@ const test = require('node:test');
 const childProcess = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
-const hookConfig = JSON.parse(fs.readFileSync(path.join(root, 'hooks', 'codex-hooks.json'), 'utf8'));
+const hookConfig = JSON.parse(fs.readFileSync(path.join(root, '.codex', 'hooks.json'), 'utf8'));
 
 function commandHooks(eventName) {
   return hookConfig.hooks[eventName].flatMap(group => group.hooks);
@@ -71,4 +71,12 @@ test('selftest does not overwrite selected user config', () => {
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), userConfig);
+});
+
+test('Codex command prompts expose existing onmhj CLI entry points', () => {
+  const onmhj = fs.readFileSync(path.join(root, 'commands', 'onmhj.md'), 'utf8');
+  const ejmhj = fs.readFileSync(path.join(root, 'commands', 'ejmhj.md'), 'utf8');
+
+  assert.match(onmhj, /bin\/onmhj\.js/);
+  assert.match(ejmhj, /bin\/onmhj\.js" ejmhj/);
 });

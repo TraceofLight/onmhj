@@ -18,6 +18,7 @@ function usage() {
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
+    '  onmhj ejmhj [YYYY-MM-DD] [--no-push]',
     '  onmhj worker',
     '  onmhj status',
     '  onmhj selftest',
@@ -1136,6 +1137,7 @@ function main() {
   if (cmd === 'inject') return inject(opts);
   if (cmd === 'import') return importEvents(first);
   if (cmd === 'flush') return flush(first && !first.startsWith('--') ? first : undefined, opts);
+  if (cmd === 'ejmhj') return flush(first && !first.startsWith('--') ? first : previousLocalDateKey(new Date(), config().timeZone), opts);
   if (cmd === 'worker') return worker();
   if (cmd === 'status') return status();
   if (cmd === 'selftest') return selftest();

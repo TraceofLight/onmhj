@@ -1,0 +1,2 @@
+description = "Flush yesterday's onmhj worklog, or a specified local date"
+prompt = "Run the installed onmhj ejmhj command with {{args}}, then report its output concisely. Resolve the plugin root from CODEX_PLUGIN_ROOT, then CLAUDE_PLUGIN_ROOT, then ONMHJ_ROOT. Run `node \"$PLUGIN_ROOT/bin/onmhj.js\" ejmhj {{args}}`. With no date, this flushes yesterday in the configured timezone. State before running that it commits and pushes the registered report repository unless --no-push was supplied."
