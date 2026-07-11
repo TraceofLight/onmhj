@@ -7,6 +7,7 @@
 - Confirmed dates only after report generation and git publication succeed.
 - Requeued missing or invalid reports, including storage-only dates without a local event spool.
 - Made `ejmhj` run the same full report pipeline as background jobs.
+- Simplified the Korean final report title to `# YYYY-MM-DD 뭐 했지`.
 
 ## 0.1.11 - 2026-07-09
 
