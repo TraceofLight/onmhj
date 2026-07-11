@@ -76,6 +76,7 @@ test('builds a final-report prompt for the work date and evidence', () => {
   const prompt = onmhj.buildReportPrompt(date, '# daily evidence', '{"event":"UserPromptSubmit"}\n');
 
   assert.match(prompt, /2026-07-11/);
+  assert.match(prompt, /# 2026-07-11 뭐 했지/);
   assert.match(prompt, /# daily evidence/);
   assert.match(prompt, /UserPromptSubmit/);
   assert.match(prompt, /## 작업 이유/);
@@ -91,6 +92,13 @@ test('accepts a report with the exact work-date heading and required sections', 
 test('rejects a report for a different date', () => {
   assert.throws(
     () => onmhj.validateReport(validReport().replace(date, '2026-07-12'), date),
+    /heading/,
+  );
+});
+
+test('rejects the previous Korean report heading', () => {
+  assert.throws(
+    () => onmhj.validateReport(validReport().replace('뭐 했지', '어제 뭐 했지'), date),
     /heading/,
   );
 });
