@@ -9,10 +9,11 @@ AI-session worklog capture for Codex and Claude Code.
 ## Why
 
 - Local-first hooks: session events append to local JSONL, not directly to git.
-- Git-backed history: `flush` writes raw JSONL and daily Markdown into a separate report repo.
+- Git-backed history: `flush` writes raw JSONL and deterministic daily Markdown into a separate report repo.
+- Automatic final reports: report jobs turn daily evidence into `reports/YYYY-MM-DD.md` through Codex or an OpenAI-compatible API.
 - Multi-device safe: each computer has a `deviceId`; existing raw logs are pulled, merged, and deduped.
 - Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.
-- Agent auth by default: daily report generation uses the active Codex/Claude Code auth unless API mode is explicitly enabled.
+- Agent auth by default: final report generation uses local Codex authentication unless API mode is explicitly enabled.
 
 ## Install
 
@@ -64,7 +65,7 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 
 ![onmhj workflow](./docs/assets/workflow.svg)
 
-`confirmedThrough` advances only in date order. If an earlier report is waiting for retry, later jobs stay pending. If another device later exposes an older `confirmedThrough`, the floor drops and affected dates are queued again.
+`confirmedThrough` advances only in date order for each device. If an earlier report is waiting for retry, later jobs stay pending. A slower device catches up from its own local events; its older watermark does not regenerate another device's already valid final reports.
 
 ## Commands
 
@@ -73,8 +74,8 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj register <repo>` | Set the external report repo. |
 | `onmhj config ...` | Update timezone, device id, owner, language, auth, and API settings. |
 | `onmhj status` | Show config, local event count, confirmed floor, and job counts. |
-| `onmhj flush [date]` | Merge local/report events, regenerate daily Markdown, commit, and push. |
-| `onmhj ejmhj [date]` | Flush yesterday in the configured timezone, or the specified date. |
+| `onmhj flush [date]` | Merge events and publish raw/daily evidence without confirming the date. |
+| `onmhj ejmhj [date]` | Publish raw/daily/final report for yesterday or the specified work date. |
 | `onmhj inject --text=...` | Add one normalized manual event. |
 | `onmhj import <events.jsonl>` | Bulk import normalized JSONL events. |
 | `onmhj worker` | Process pending report jobs in the background. |
@@ -118,8 +119,13 @@ Local machine:
 Report repo:
 
 - raw events: `raw/ai-sessions/YYYY-MM-DD.jsonl`
-- daily report: `daily/YYYY-MM-DD.md`
+- daily evidence: `daily/YYYY-MM-DD.md`
+- final report: `reports/YYYY-MM-DD.md`
 - device confirmations: `state/devices/DEVICE_ID.json`
+
+A date is confirmed only after its final report passes validation and raw, daily, report, and device confirmation are committed successfully. Completed jobs with a missing or invalid report are queued again automatically.
+
+`--no-push` generates and commits raw, daily, and final report artifacts without writing confirmation. Normal `ejmhj` uses the ordered job queue, so a later date cannot bypass an earlier retry and confirmation never moves backward.
 
 ## Safety
 
@@ -128,4 +134,6 @@ Report repo:
 - `flush`/worker pulls before writing; direct report-repo edits and custom backfills must do the same manually.
 - Prompt capture defaults to `preview`; use `full` or `off` as needed.
 - Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
+- Agent reports run through the native Codex executable with a timeout in an empty read-only workspace. Shell, unified exec, apps, multi-agent, hooks, goals, image, and web tools are disabled; evidence is treated as untrusted data.
+- Automatic publication refuses to run when the report repository already has staged changes and uses a repository-wide publication lock.
 - Local report dates use the configured timezone; event spool filenames use UTC.

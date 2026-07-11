@@ -1,7 +1,7 @@
 {
   "name": "onmhj",
-  "version": "0.1.11+codex.20260711124653",
-  "description": "Local AI-session worklog capture with ordered confirmed-date retries.",
+  "version": "0.1.12+codex.20260712024353",
+  "description": "Local AI-session capture with automatic final reports and ordered retries.",
   "author": {
     "name": "onmhj maintainers"
   },
@@ -16,7 +16,7 @@
   "interface": {
     "displayName": "Onmhj",
     "shortDescription": "Record AI-session worklogs locally.",
-    "longDescription": "Captures Codex hook events to local JSONL, then auto-enqueues unconfirmed report dates that flush device-tagged raw and language-aware markdown logs to a user-registered git repository. Flush pulls and merges existing raw logs before committing, and shared device confirmations let slow machines lower the confirmed floor for retries. Daily report generation defaults to active Codex/Claude Code auth; API mode is reserved for explicit bulk backfills.",
+    "longDescription": "Captures Codex hook events to local JSONL, publishes deterministic daily evidence, and generates validated final reports through local Codex auth or an OpenAI-compatible API. Missing reports are retried in work-date order, and a date is confirmed only after raw, daily, report, and device confirmation are committed successfully.",
     "developerName": "onmhj maintainers",
     "category": "Productivity",
     "capabilities": [
@@ -26,7 +26,7 @@
     ],
     "defaultPrompt": [
       "Show today's AI worklog status.",
-      "Flush today's worklog to git."
+      "Generate yesterday's final worklog report."
     ]
   }
 }

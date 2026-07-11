@@ -32,7 +32,7 @@
 
   <rect class="bg" x="0" y="0" width="1280" height="800"/>
   <text class="title" x="64" y="64">onmhj workflow</text>
-  <text class="subtitle" x="64" y="92">Capture locally, merge across devices, publish daily reports, retry until confirmed.</text>
+  <text class="subtitle" x="64" y="92">Capture locally, publish daily evidence and final reports, retry until confirmed.</text>
 
   <rect class="lane" x="48" y="126" width="354" height="590" rx="20"/>
   <rect class="lane" x="462" y="126" width="354" height="590" rx="20"/>
@@ -40,7 +40,7 @@
 
   <text class="lane-label" x="76" y="158">CAPTURE</text>
   <text class="lane-label" x="490" y="158">QUEUE</text>
-  <text class="lane-label" x="904" y="158">FLUSH + CONFIRM</text>
+  <text class="lane-label" x="904" y="158">REPORT + CONFIRM</text>
 
   <rect class="card card-capture" x="86" y="192" width="278" height="92" rx="14"/>
   <text class="card-title" x="114" y="228">Codex / Claude Code</text>
@@ -83,9 +83,11 @@
   <text class="card-text" x="942" y="386">raw/ai-sessions/YYYY-MM-DD.jsonl</text>
   <text class="card-text" x="942" y="410">daily/YYYY-MM-DD.md</text>
 
+  <text class="small" x="942" y="432">reports/YYYY-MM-DD.md</text>
+
   <rect class="card card-flush" x="914" y="486" width="278" height="84" rx="14"/>
   <text class="card-title" x="942" y="520">Commit and push</text>
-  <text class="card-text" x="942" y="546">Publish generated report files</text>
+  <text class="card-text" x="942" y="546">Publish all artifacts atomically</text>
 
   <rect class="card card-done" x="910" y="626" width="136" height="66" rx="14"/>
   <text class="card-title" x="978" y="656" text-anchor="middle">Success</text>

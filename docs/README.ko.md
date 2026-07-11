@@ -9,10 +9,11 @@ Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 ## 왜 쓰나
 
 - local-first hook: 세션 이벤트는 git에 바로 쓰지 않고 local JSONL에 append한다.
-- git-backed history: `flush`가 별도 report repo에 raw JSONL과 daily Markdown을 쓴다.
+- git-backed history: `flush`가 별도 report repo에 raw JSONL과 기계적으로 정리한 daily Markdown을 쓴다.
+- automatic final reports: report job이 Codex 또는 OpenAI 호환 API를 통해 `reports/YYYY-MM-DD.md` 최종보고서를 만든다.
 - multi-device safe: 컴퓨터마다 `deviceId`를 두고, 기존 raw 로그를 pull/merge/dedupe한다.
 - automatic catch-up: background job이 확정되지 않은 날짜를 `confirmedThrough`가 전진할 때까지 재시도한다.
-- agent auth default: 일반 리포트 생성은 Codex/Claude Code의 active auth를 기본값으로 쓴다.
+- agent auth default: 최종보고서 생성은 로컬 Codex 인증을 기본값으로 쓴다.
 
 ## Install
 
@@ -64,7 +65,7 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 
 ![onmhj workflow](./assets/workflow.svg)
 
-`confirmedThrough`는 날짜 순서대로만 전진한다. 앞 날짜 report가 retry 대기 중이면 뒤 날짜 job은 pending 상태로 둔다. 다른 device가 나중에 더 오래된 `confirmedThrough`를 노출하면 floor를 낮추고 영향 날짜를 다시 queue한다.
+`confirmedThrough`는 device별로 날짜 순서대로만 전진한다. 앞 날짜 report가 retry 대기 중이면 뒤 날짜 job은 pending 상태로 둔다. 느린 device는 자기 local event를 기준으로 catch-up하며, 그 device의 오래된 watermark 때문에 다른 device의 정상 final report를 다시 생성하지 않는다.
 
 ## Commands
 
@@ -73,7 +74,8 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj register <repo>` | 외부 report repo 설정 |
 | `onmhj config ...` | timezone, device id, owner, language, auth, API 설정 변경 |
 | `onmhj status` | config, local event 수, confirmed floor, job 수 확인 |
-| `onmhj flush [date]` | local/report event 병합, daily Markdown 재생성, commit/push |
+| `onmhj flush [date]` | event 병합과 raw/daily 근거 발행. 날짜 확정 안 함 |
+| `onmhj ejmhj [date]` | 어제 또는 지정 작업일의 raw/daily/최종보고서 발행 |
 | `onmhj inject --text=...` | 수동 이벤트 1건 추가 |
 | `onmhj import <events.jsonl>` | 정규화된 JSONL bulk import |
 | `onmhj worker` | pending report job 처리 |
@@ -115,8 +117,13 @@ Local machine:
 Report repo:
 
 - raw events: `raw/ai-sessions/YYYY-MM-DD.jsonl`
-- daily report: `daily/YYYY-MM-DD.md`
+- daily evidence: `daily/YYYY-MM-DD.md`
+- final report: `reports/YYYY-MM-DD.md`
 - device confirmations: `state/devices/DEVICE_ID.json`
+
+최종보고서 검증과 raw, daily, report, device confirmation 커밋이 모두 성공해야 날짜를 확정한다. 완료 상태였더라도 report가 없거나 형식이 잘못되면 자동으로 다시 queue한다.
+
+`--no-push`는 raw, daily, 최종보고서를 생성·커밋하지만 confirmation을 쓰지 않는다. 일반 `ejmhj`는 ordered job queue를 사용하므로 뒤 날짜가 앞선 retry를 건너뛰지 않고 confirmation도 역행하지 않는다.
 
 ## Safety
 
@@ -125,4 +132,6 @@ Report repo:
 - `flush`/worker는 쓰기 전에 pull한다. 직접 report repo를 수정하거나 custom backfill을 실행하면 동일한 pull을 수동으로 먼저 해야 한다.
 - prompt capture 기본값은 `preview`다. 필요하면 `full` 또는 `off`를 쓴다.
 - prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
+- agent report는 native Codex executable을 timeout이 있는 비어 있는 read-only workspace에서 실행한다. shell, unified exec, apps, multi-agent, hooks, goals, image, web tool을 비활성화하고 evidence를 신뢰할 수 없는 데이터로 취급한다.
+- report repo에 이미 staged change가 있으면 자동 발행을 거부하며 repo 전체 publication lock을 사용한다.
 - report local date는 설정 timezone 기준이고, event spool 파일명은 UTC 기준이다.
