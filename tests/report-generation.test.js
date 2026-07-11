@@ -14,7 +14,7 @@ function validReport() {
 }
 
 function validReportFor(reportDate) {
-  return `# ${reportDate} 어제 뭐 했지
+  return `# ${reportDate} 뭐 했지
 
 ## 요약
 완료 작업 요약

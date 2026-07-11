@@ -138,7 +138,7 @@ test('does not regenerate a valid confirmed report only because another device i
   });
   const reportDir = path.join(cfg.repoPath, 'reports');
   fs.mkdirSync(reportDir, { recursive: true });
-  fs.writeFileSync(path.join(reportDir, '2026-07-09.md'), `# 2026-07-09 어제 뭐 했지
+  fs.writeFileSync(path.join(reportDir, '2026-07-09.md'), `# 2026-07-09 뭐 했지
 
 ## 요약
 - 완료
