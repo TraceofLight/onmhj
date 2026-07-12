@@ -98,9 +98,9 @@ Use a one-time Node standard-library script. Abort on any unexpected file. Repla
 
 Require 254 new headings, zero old headings, unchanged body hashes, and a Git diff containing only one removed and one added heading line per report.
 
-**Step 4: Commit and push storage**
+**Step 4: Commit storage**
 
-Commit all 254 report files with the repository commit format and push `main`.
+Commit all 254 report files with the repository commit format. Defer the storage push until every registered client is updated or confirmed inactive in Task 6.
 
 ### Task 5: Update pwiki
 
@@ -142,24 +142,36 @@ Expected: 30 or more tests pass, self-test passes, no whitespace errors.
 
 Request an independent code and migration review. Resolve Critical/Important findings.
 
-**Step 3: Merge and push**
+**Step 3: Confirm no old worker remains**
 
-Merge feature and wiki branches into their synchronized `main` branches. Re-run verification on merged code. Push code and wiki.
+Confirm no worker using the old report-title contract is running before deployment.
 
-**Step 4: Reinstall plugin**
+**Step 4: Merge and push code**
+
+Merge the feature branch into synchronized code `main`, re-run verification on merged code, and push code `main`.
+
+**Step 5: Reinstall the Windows plugin**
 
 Run `codex plugin add onmhj@onmhj-local`. Confirm installed version and source/cache hashes.
 
-**Step 5: Final storage validation**
+**Step 6: Update every other registered client**
+
+Update every other registered client to the new contract or verify that it is inactive, including `mba-traceoflight.local`. Do not push storage while any active client can still write the old title.
+
+**Step 7: Push storage**
+
+Push the already committed 254-report migration to storage `main` only after Step 6 succeeds.
+
+**Step 8: Merge and push wiki**
+
+Merge the wiki branch into synchronized wiki `main` and push wiki `main`.
+
+**Step 9: Final validation**
 
 Validate all 254 reports with the installed plugin's new Korean contract. Confirm code, storage, and wiki are clean and synchronized with upstream.
 
-### Task 7: Shut down Windows
+### Task 7: Windows Shutdown Cancelled
 
-**Step 1: Mark the goal complete**
+**Step 1: Take no shutdown action**
 
-Only after every required commit, push, reinstall, and verification succeeds.
-
-**Step 2: Schedule shutdown**
-
-Schedule Windows shutdown with a short delay so final status can be delivered. Do not schedule shutdown while any required work remains.
+The latest user instruction cancels Windows shutdown. Do not schedule or perform any shutdown action after completion.
