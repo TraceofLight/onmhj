@@ -126,7 +126,7 @@ Report repo:
 
 A date is confirmed only after its final report passes validation and raw, daily, report, and device confirmation are committed successfully. Completed jobs with a missing or invalid report are queued again automatically.
 
-`--no-push` generates and commits raw, daily, and final report artifacts without writing confirmation. Normal `ejmhj` uses the ordered job queue, so a later date cannot bypass an earlier retry and confirmation never moves backward.
+`ejmhj --no-push` generates and commits raw, daily, and final report artifacts without writing confirmation. `flush --no-push` generates and commits raw and daily evidence only. Normal `ejmhj` uses the ordered job queue, so a later date cannot bypass an earlier retry and confirmation never moves backward.
 
 ## Safety
 

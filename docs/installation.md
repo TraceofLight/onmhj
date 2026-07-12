@@ -1,14 +1,15 @@
 # Installation
 
-`onmhj` is installed as a local Codex or Claude Code plugin marketplace. It records hook events locally, then flushes daily raw/report files into a separate git repo chosen by the user.
+`onmhj` is installed as a local Codex or Claude Code plugin marketplace. Hooks record events locally. `flush` publishes raw and daily evidence to a separate report repo chosen by the user; `ejmhj` and automatic jobs add final reports.
 
 ## Prerequisites
 
 - Node.js on `PATH` for non-interactive hook execution.
-- One supported agent runtime with plugin support and an active local login:
+- One supported agent runtime with plugin support:
   - Codex CLI for Codex installation.
   - Claude Code CLI for Claude Code installation.
 - A git repo for reports, separate from any wiki repo.
+- Agent mode requires an active local login for the selected runtime; API mode instead requires configured API credentials.
 
 Example report repo:
 

@@ -126,7 +126,7 @@ Report repo:
 
 최종보고서 검증과 raw, daily, report, device confirmation 커밋이 모두 성공해야 날짜를 확정한다. 완료 상태였더라도 report가 없거나 형식이 잘못되면 자동으로 다시 queue한다.
 
-`--no-push`는 raw, daily, 최종보고서를 생성·커밋하지만 confirmation을 쓰지 않는다. 일반 `ejmhj`는 ordered job queue를 사용하므로 뒤 날짜가 앞선 retry를 건너뛰지 않고 confirmation도 역행하지 않는다.
+`ejmhj --no-push`는 raw, daily, 최종보고서를 생성·커밋하지만 confirmation을 쓰지 않는다. `flush --no-push`는 raw와 daily 근거만 생성·커밋한다. 일반 `ejmhj`는 ordered job queue를 사용하므로 뒤 날짜가 앞선 retry를 건너뛰지 않고 confirmation도 역행하지 않는다.
 
 ## Safety
 
