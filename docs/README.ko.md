@@ -14,6 +14,7 @@ Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 - multi-device safe: 컴퓨터마다 `deviceId`를 두고, 기존 raw 로그를 pull/merge/dedupe한다.
 - automatic catch-up: background job이 확정되지 않은 날짜를 `confirmedThrough`가 전진할 때까지 재시도한다.
 - agent auth default: Claude plugin은 로컬 Claude Code 로그인을, Codex plugin과 standalone CLI는 로컬 Codex 로그인을 쓴다. API mode는 공용이다.
+- native executable override: 비표준 설치 경로는 `ONMHJ_CLAUDE_EXECUTABLE` 또는 `ONMHJ_CODEX_EXECUTABLE`로 지정한다.
 
 ## Install
 

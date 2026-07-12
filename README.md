@@ -14,6 +14,7 @@ AI-session worklog capture for Codex and Claude Code.
 - Multi-device safe: each computer has a `deviceId`; existing raw logs are pulled, merged, and deduped.
 - Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.
 - Agent auth by default: the Claude plugin uses the local Claude Code login; the Codex plugin and standalone CLI use the local Codex login. API mode is shared.
+- Native executable override: set `ONMHJ_CLAUDE_EXECUTABLE` or `ONMHJ_CODEX_EXECUTABLE` for a nonstandard installation path.
 
 ## Install
 
