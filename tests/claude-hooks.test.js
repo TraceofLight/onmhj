@@ -54,9 +54,10 @@ test('Claude handlers use the minimal exec form', () => {
   }
 });
 
-test('Claude handlers execute and record their hook events', () => {
+test('Claude handlers execute and record their hook events', t => {
   const config = readHookConfig();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-claude-hooks-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
   const stateDir = path.join(tmp, 'state');
   const configPath = path.join(tmp, 'config.json');
   fs.writeFileSync(configPath, JSON.stringify({ stateDir, promptMode: 'full' }));
