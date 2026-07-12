@@ -52,7 +52,7 @@ Both backends use the same prompt and validation contract. Secrets and credentia
 ## Report Contract
 
 ```md
-# YYYY-MM-DD 어제 뭐 했지
+# YYYY-MM-DD 뭐 했지
 
 ## 요약
 ## 작업 이유

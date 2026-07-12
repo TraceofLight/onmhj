@@ -763,7 +763,7 @@ const REPORT_CONTRACTS = {
     sections: ['Summary', 'Work reasons', 'Work process', 'Decisions', 'Results', 'Remaining work'],
   },
   ko: {
-    title: '어제 뭐 했지',
+    title: '뭐 했지',
     sections: ['요약', '작업 이유', '작업 과정', '결정 사항', '도출 결과', '남은 일'],
   },
 };
@@ -1331,7 +1331,7 @@ async function selftest() {
     throw new Error('unconfirmed report dates were not queued');
   }
   const createSelftestReport = async (_cfg, date) => validateReport([
-    `# ${date} 어제 뭐 했지`,
+    `# ${date} 뭐 했지`,
     '',
     ...reportContract('ko').sections.flatMap(section => [`## ${section}`, '- selftest', '']),
   ].join('\n'), date);
