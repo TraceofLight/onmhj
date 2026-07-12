@@ -7,7 +7,7 @@
 - Node.js on `PATH` for non-interactive hook execution.
 - One supported agent runtime with plugin support:
   - Codex CLI for Codex installation.
-  - Claude Code CLI for Claude Code installation.
+  - Claude Code CLI for Claude Code installation; agent mode requires Claude Code 2.1.169 or newer (`--safe-mode`).
 - A git repo for reports, separate from any wiki repo.
 - Agent mode requires an active local login for the selected runtime; API mode instead requires configured API credentials.
 
@@ -233,6 +233,8 @@ If internal logs are empty too, the plugin hook is not running. Update or reinst
 If the hook cannot find Node, install Node or make sure the selected plugin runtime can resolve `node` non-interactively.
 
 If Windows Codex reports `SessionStart hook (failed)` or `UserPromptSubmit hook (failed)` with exit code 1 after install, check `.codex/hooks.json`. Version `0.1.10` had POSIX-only hook commands, which PowerShell parsed as invalid syntax. Version `0.1.11` adds `commandWindows` entries for Codex on Windows. Reinstall with `codex plugin add onmhj@onmhj-local`, then start a new session.
+
+If Claude report generation reports an unknown `--safe-mode` option, run `claude --version`. Update to Claude Code 2.1.169 or newer with `claude update`, then retry.
 
 If Claude report generation says the native agent failed, run `claude auth status` and confirm the selected `claude` executable resolves in the non-interactive environment. Set `ONMHJ_CLAUDE_EXECUTABLE` when the binary is installed at a nonstandard path, then retry the pending job from a Claude Code session.
 

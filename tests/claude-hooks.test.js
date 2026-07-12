@@ -28,11 +28,11 @@ function expectedHook(eventName) {
   };
 }
 
-test('Claude manifest points to the Claude-native hook config', () => {
+test('Claude manifest relies on default hook auto-discovery', () => {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
-  assert.equal(manifest.hooks, './hooks/hooks.json');
-  assert.ok(fs.existsSync(path.resolve(root, manifest.hooks)));
+  assert.equal(Object.hasOwn(manifest, 'hooks'), false);
+  assert.ok(fs.existsSync(hookPath));
 });
 
 test('Claude hook config defines only SessionStart and UserPromptSubmit', () => {

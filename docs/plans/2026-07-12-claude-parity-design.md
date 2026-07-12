@@ -24,7 +24,7 @@ Both native backends share prompt construction, secret redaction, report validat
 
 ## Claude Plugin Packaging
 
-Give Claude a dedicated `hooks/hooks.json` using Claude's command-plus-args hook contract and `${CLAUDE_PLUGIN_ROOT}`. Keep `.codex/hooks.json` for Codex. Point the Claude manifest at its hook file.
+Give Claude a dedicated `hooks/hooks.json` using Claude's command-plus-args hook contract and `${CLAUDE_PLUGIN_ROOT}`. Keep `.codex/hooks.json` for Codex. Rely on Claude's default discovery for `hooks/hooks.json`; do not also reference it from the manifest because that loads the same hook file twice.
 
 Bump the Claude plugin version so the installed `0.1.11` cache updates. Refresh marketplace metadata and installation documentation. Document Claude's namespaced commands:
 

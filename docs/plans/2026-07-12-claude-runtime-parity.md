@@ -123,7 +123,7 @@ Commit `bin/onmhj.js` and `tests/report-generation.test.js` using the repository
 
 **Step 1: Write failing package tests**
 
-Require the Claude manifest to point at `./hooks/hooks.json`. Require `SessionStart` and `UserPromptSubmit` command hooks to use:
+Require the Claude manifest to omit its own `hooks` property and the default `hooks/hooks.json` to exist. Require `SessionStart` and `UserPromptSubmit` command hooks to use:
 
 ```json
 {
@@ -140,15 +140,15 @@ Execute both handlers with a temporary `ONMHJ_CONFIG`, resolved plugin-root argu
 
 Run: `node --test tests/claude-hooks.test.js`
 
-Expected: failure because `hooks/hooks.json` does not exist and the manifest points at the Codex hook file.
+Expected: failure because `hooks/hooks.json` does not exist and the manifest still has an explicit hook reference.
 
 **Step 3: Add the dedicated hook file**
 
 Create Claude-native `SessionStart` and `UserPromptSubmit` definitions. Limit the `SessionStart` matcher to `startup|resume|clear|compact`. Do not add `Stop`; current automatic scheduling contract already runs at session start.
 
-**Step 4: Point the Claude manifest at it**
+**Step 4: Use Claude's default hook auto-discovery**
 
-Change only the Claude `hooks` path. Leave `.codex/hooks.json` unchanged.
+Remove the Claude manifest's explicit `hooks` reference. Claude discovers `hooks/hooks.json` automatically, and referencing the default file in the manifest would load it twice. Leave `.codex/hooks.json` unchanged.
 
 **Step 5: Verify GREEN and strict validation**
 
@@ -163,7 +163,7 @@ Expected: both hook suites pass and Claude validation succeeds.
 
 **Step 6: Commit**
 
-Commit hook file, manifest path, and tests.
+Commit hook file, manifest cleanup, and tests.
 
 ### Task 4: Synchronize versions and documentation
 
