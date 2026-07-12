@@ -8,6 +8,32 @@ const test = require('node:test');
 const onmhj = require('../bin/onmhj.js');
 
 const date = '2026-07-11';
+const codexAgentArgs = [
+  'exec',
+  '--ignore-user-config',
+  '--ignore-rules',
+  '--ephemeral',
+  '--skip-git-repo-check',
+  '--sandbox',
+  'read-only',
+  '--disable',
+  'shell_tool',
+  '--disable',
+  'unified_exec',
+  '--disable',
+  'multi_agent',
+  '--disable',
+  'apps',
+  '--disable',
+  'hooks',
+  '--disable',
+  'goals',
+  '-c',
+  'tools.view_image=false',
+  '-c',
+  'tools.web_search=false',
+  '-',
+];
 
 function validReport() {
   return validReportFor(date);
@@ -153,7 +179,7 @@ test('builds and validates the English final-report contract', () => {
   assert.throws(() => onmhj.validateReport(validReport(), date, 'en'), /heading/);
 });
 
-test('generates a validated report with Codex agent auth', async () => {
+test('generates a validated report with Codex agent auth without a plugin root', async () => {
   let invocation;
   const report = await onmhj.generateReport(
     { reportAuth: 'agent' },
@@ -161,6 +187,7 @@ test('generates a validated report with Codex agent auth', async () => {
     '# daily evidence',
     '{"event":"UserPromptSubmit"}\n',
     {
+      env: {},
       codexCommand: 'codex-native',
       runAgent(command, args, input, options) {
         invocation = { command, args, input, options };
@@ -171,34 +198,73 @@ test('generates a validated report with Codex agent auth', async () => {
 
   assert.equal(report, validReport());
   assert.equal(invocation.command, 'codex-native');
-  assert.deepEqual(invocation.args, [
-    'exec',
-    '--ignore-user-config',
-    '--ignore-rules',
-    '--ephemeral',
-    '--skip-git-repo-check',
-    '--sandbox',
-    'read-only',
-    '--disable',
-    'shell_tool',
-    '--disable',
-    'unified_exec',
-    '--disable',
-    'multi_agent',
-    '--disable',
-    'apps',
-    '--disable',
-    'hooks',
-    '--disable',
-    'goals',
-    '-c',
-    'tools.view_image=false',
-    '-c',
-    'tools.web_search=false',
-    '-',
-  ]);
+  assert.deepEqual(invocation.args, codexAgentArgs);
   assert.match(invocation.input, /daily evidence/);
   assert.ok(invocation.options.timeout > 0);
+  assert.equal(fs.existsSync(invocation.options.cwd), false);
+});
+
+test('keeps Codex agent auth when CODEX_PLUGIN_ROOT is present', async () => {
+  let invocation;
+  await onmhj.generateReport(
+    { reportAuth: 'agent' },
+    date,
+    'daily',
+    'raw',
+    {
+      env: { CODEX_PLUGIN_ROOT: 'codex-plugin' },
+      claudeCommand: 'claude-native',
+      codexCommand: 'codex-native',
+      runAgent(command, args) {
+        invocation = { command, args };
+        return { status: 0, stdout: validReport(), stderr: '' };
+      },
+    },
+  );
+
+  assert.equal(invocation.command, 'codex-native');
+  assert.deepEqual(invocation.args, codexAgentArgs);
+});
+
+test('generates a validated report with Claude agent auth', async () => {
+  let invocation;
+  const report = await onmhj.generateReport(
+    { reportAuth: 'agent' },
+    date,
+    '# daily evidence',
+    '{"event":"UserPromptSubmit"}\n',
+    {
+      env: {
+        CLAUDE_PLUGIN_ROOT: 'claude-plugin',
+        CLAUDECODE: '1',
+        CLAUDE_CODE_ENTRYPOINT: 'cli',
+      },
+      claudeCommand: 'claude-native',
+      codexCommand: 'codex-native',
+      runAgent(command, args, input, options) {
+        invocation = { command, args, input, options };
+        return { status: 0, stdout: validReport(), stderr: '' };
+      },
+    },
+  );
+
+  assert.equal(report, validReport());
+  assert.equal(invocation.command, 'claude-native');
+  assert.deepEqual(invocation.args, [
+    '-p',
+    '--safe-mode',
+    '--tools',
+    '',
+    '--no-session-persistence',
+    '--no-chrome',
+    '--output-format',
+    'text',
+  ]);
+  assert.match(invocation.input, /daily evidence/);
+  assert.equal(invocation.options.timeout, 10 * 60 * 1000);
+  assert.equal('CLAUDECODE' in invocation.options.env, false);
+  assert.equal('CLAUDE_CODE_ENTRYPOINT' in invocation.options.env, false);
+  assert.equal(invocation.options.env.CLAUDE_PLUGIN_ROOT, 'claude-plugin');
   assert.equal(fs.existsSync(invocation.options.cwd), false);
 });
 
@@ -264,6 +330,23 @@ test('surfaces Codex report generation failures', async () => {
       { runAgent: () => ({ status: 1, stdout: '', stderr: 'agent failed' }) },
     ),
     /agent failed/,
+  );
+});
+
+test('surfaces Claude report generation failures', async () => {
+  await assert.rejects(
+    () => onmhj.generateReport(
+      { reportAuth: 'agent' },
+      date,
+      'daily',
+      'raw',
+      {
+        env: { CLAUDE_PLUGIN_ROOT: 'claude-plugin' },
+        claudeCommand: 'claude-native',
+        runAgent: command => ({ status: 1, stdout: '', stderr: `${command} failed` }),
+      },
+    ),
+    /report agent failed: claude-native failed/,
   );
 });
 

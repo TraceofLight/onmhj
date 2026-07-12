@@ -849,6 +849,21 @@ function resolveCodexExecutable(env = process.env) {
   return executable;
 }
 
+function nativeAgentProvider(env = process.env) {
+  return env.CLAUDE_PLUGIN_ROOT ? 'claude' : 'codex';
+}
+
+function resolveClaudeExecutable(env = process.env) {
+  return env.ONMHJ_CLAUDE_EXECUTABLE || 'claude';
+}
+
+function claudeAgentEnvironment(env = process.env) {
+  const childEnv = { ...env };
+  delete childEnv.CLAUDECODE;
+  delete childEnv.CLAUDE_CODE_ENTRYPOINT;
+  return childEnv;
+}
+
 async function requestApi(url, options, body, fetchImpl = fetch) {
   const response = await fetchImpl(url, { ...options, body: JSON.stringify(body) });
   const text = await response.text();
@@ -891,8 +906,11 @@ async function generateReport(cfg, date, daily, raw, deps = {}) {
       : '';
   } else {
     const callAgent = deps.runAgent || runAgent;
-    const command = deps.codexCommand || resolveCodexExecutable(deps.env || process.env);
-    const args = [
+    const env = deps.env || process.env;
+    const provider = nativeAgentProvider(env);
+    let command = deps.codexCommand;
+    if (!command && provider === 'codex') command = resolveCodexExecutable(env);
+    let args = [
       'exec',
       '--ignore-user-config',
       '--ignore-rules',
@@ -918,10 +936,16 @@ async function generateReport(cfg, date, daily, raw, deps = {}) {
       'tools.web_search=false',
       '-',
     ];
+    if (provider === 'claude') {
+      command = deps.claudeCommand || resolveClaudeExecutable(env);
+      args = ['-p', '--safe-mode', '--tools', '', '--no-session-persistence', '--no-chrome', '--output-format', 'text'];
+    }
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-report-agent-'));
     let result;
     try {
-      result = callAgent(command, args, prompt, { cwd, timeout: REPORT_BACKEND_TIMEOUT_MS });
+      const options = { cwd, timeout: REPORT_BACKEND_TIMEOUT_MS };
+      if (provider === 'claude') options.env = claudeAgentEnvironment(env);
+      result = callAgent(command, args, prompt, options);
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
     }
