@@ -228,17 +228,19 @@ test('keeps Codex agent auth when CODEX_PLUGIN_ROOT is present', async () => {
 
 test('generates a validated report with Claude agent auth', async () => {
   let invocation;
+  const env = {
+    CLAUDE_PLUGIN_ROOT: 'claude-plugin',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    ANTHROPIC_API_KEY: 'test-auth-key',
+  };
   const report = await onmhj.generateReport(
     { reportAuth: 'agent' },
     date,
     '# daily evidence',
     '{"event":"UserPromptSubmit"}\n',
     {
-      env: {
-        CLAUDE_PLUGIN_ROOT: 'claude-plugin',
-        CLAUDECODE: '1',
-        CLAUDE_CODE_ENTRYPOINT: 'cli',
-      },
+      env,
       claudeCommand: 'claude-native',
       codexCommand: 'codex-native',
       runAgent(command, args, input, options) {
@@ -262,10 +264,37 @@ test('generates a validated report with Claude agent auth', async () => {
   ]);
   assert.match(invocation.input, /daily evidence/);
   assert.equal(invocation.options.timeout, 10 * 60 * 1000);
-  assert.equal('CLAUDECODE' in invocation.options.env, false);
-  assert.equal('CLAUDE_CODE_ENTRYPOINT' in invocation.options.env, false);
-  assert.equal(invocation.options.env.CLAUDE_PLUGIN_ROOT, 'claude-plugin');
+  assert.notEqual(invocation.options.env, env);
+  assert.deepEqual(invocation.options.env, {
+    CLAUDE_PLUGIN_ROOT: 'claude-plugin',
+    ANTHROPIC_API_KEY: 'test-auth-key',
+  });
+  assert.equal(env.CLAUDECODE, '1');
+  assert.equal(env.CLAUDE_CODE_ENTRYPOINT, 'cli');
+  assert.equal(env.ANTHROPIC_API_KEY, 'test-auth-key');
   assert.equal(fs.existsSync(invocation.options.cwd), false);
+});
+
+test('uses ONMHJ_CLAUDE_EXECUTABLE for Claude agent auth', async () => {
+  let invokedCommand;
+  await onmhj.generateReport(
+    { reportAuth: 'agent' },
+    date,
+    'daily',
+    'raw',
+    {
+      env: {
+        CLAUDE_PLUGIN_ROOT: 'claude-plugin',
+        ONMHJ_CLAUDE_EXECUTABLE: 'claude-from-env',
+      },
+      runAgent(command) {
+        invokedCommand = command;
+        return { status: 0, stdout: validReport(), stderr: '' };
+      },
+    },
+  );
+
+  assert.equal(invokedCommand, 'claude-from-env');
 });
 
 test('generates a validated report with OpenAI-compatible API auth', async () => {
