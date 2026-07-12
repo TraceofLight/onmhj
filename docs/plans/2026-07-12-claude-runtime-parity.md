@@ -148,7 +148,7 @@ Create Claude-native `SessionStart` and `UserPromptSubmit` definitions. Limit th
 
 **Step 4: Use Claude's default hook auto-discovery**
 
-Remove the Claude manifest's explicit `hooks` reference. Claude discovers `hooks/hooks.json` automatically, and referencing the default file in the manifest would load it twice. Leave `.codex/hooks.json` unchanged.
+Remove the Claude manifest's explicit `hooks` reference. Claude discovers `hooks/hooks.json` automatically, and the current Claude loader rejects an explicit manifest reference to that same standard file as a duplicate. Leave `.codex/hooks.json` unchanged.
 
 **Step 5: Verify GREEN and strict validation**
 

@@ -35,6 +35,26 @@ test('Claude manifest relies on default hook auto-discovery', () => {
   assert.ok(fs.existsSync(hookPath));
 });
 
+test('Claude loader accepts default hook auto-discovery', t => {
+  const version = childProcess.spawnSync('claude', ['--version'], { encoding: 'utf8' });
+  if (version.error?.code === 'ENOENT') return t.skip('Claude CLI unavailable');
+  assert.equal(version.status, 0, version.stderr || version.error?.message || version.stdout);
+
+  const result = childProcess.spawnSync(
+    'claude',
+    ['--plugin-dir', root, 'plugin', 'list', '--json'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 0, result.stderr || result.error?.message || result.stdout);
+
+  const plugins = JSON.parse(result.stdout);
+  const inline = plugins.find(plugin => plugin.id === 'onmhj@inline');
+  assert.ok(inline, 'onmhj@inline must be present');
+  assert.equal(inline.version, '0.1.13');
+  assert.equal(inline.enabled, true);
+  assert.deepEqual(inline.errors || [], []);
+});
+
 test('Claude hook config defines only SessionStart and UserPromptSubmit', () => {
   const config = readHookConfig();
 
