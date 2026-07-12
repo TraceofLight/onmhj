@@ -8,5 +8,5 @@
   "repository": "https://github.com/TraceofLight/onmhj",
   "license": "MIT",
   "keywords": ["worklog", "claude-code", "hooks", "git"],
-  "hooks": "./.codex/hooks.json"
+  "hooks": "./hooks/hooks.json"
 }
