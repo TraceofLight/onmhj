@@ -5,7 +5,9 @@
 ## Prerequisites
 
 - Node.js on `PATH` for non-interactive hook execution.
-- Codex CLI with plugin support.
+- One supported agent runtime with plugin support and an active local login:
+  - Codex CLI for Codex installation.
+  - Claude Code CLI for Claude Code installation.
 - A git repo for reports, separate from any wiki repo.
 
 Example report repo:
@@ -57,7 +59,13 @@ claude plugin install onmhj@onmhj-local
 claude plugin enable onmhj@onmhj-local
 ```
 
-Restart Claude Code after installing so the hook settings reload.
+To update an existing user-scope install:
+
+```sh
+claude plugin update onmhj@onmhj-local --scope user
+```
+
+Run `/reload-plugins` in the current Claude Code session, or start a new session, so the updated commands and hooks load. Claude Code commands are namespaced: `/onmhj:onmhj ...` and `/onmhj:ejmhj [date]`.
 
 ## Configure Report Repo
 
@@ -93,15 +101,15 @@ node /path/to/onmhj/bin/onmhj.js config \
   --owner-email=you@example.com
 ```
 
-Automatic final report generation uses local Codex authentication by default:
+Automatic final report generation uses the active plugin runtime's local authentication:
 
 ```sh
 node /path/to/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent
 ```
 
-`report-lang` controls both deterministic daily labels and the final report contract (`ko` or `en`). It defaults from the user's locale when unset. Agent mode runs the native Codex executable non-interactively with model tools disabled, an isolated read-only workspace, and a bounded timeout. On Windows, install Codex CLI with npm or set `ONMHJ_CODEX_EXECUTABLE` to the native binary. Prompt templates and plugin command text stay in English.
+`report-lang` controls deterministic daily labels and the final report contract (`ko` or `en`). It defaults from the user's locale when unset. The Claude plugin uses the local Claude Code login; the Codex plugin and standalone CLI use the local Codex login. Set `ONMHJ_CLAUDE_EXECUTABLE` or `ONMHJ_CODEX_EXECUTABLE` to override the executable selected for that runtime. Agent mode runs non-interactively in an isolated temporary directory with a bounded timeout. Claude Code disables customizations, tools, browser integration, and session persistence; Codex ignores user configuration and rules and uses a read-only sandbox with report-irrelevant tools disabled. Plugin command instruction text remains English, while generated daily and report output follows `report-lang`.
 
-Use OpenAI-compatible API settings only for explicit bulk backfill jobs:
+API mode is shared by both plugin runtimes and requires explicit configuration:
 
 ```sh
 node /path/to/onmhj/bin/onmhj.js config \
@@ -168,13 +176,15 @@ Before writing to the onmhj report repo, exclude or redact tokens, API keys, pas
 
 ## Smoke Test
 
-Run a short Codex session in a target repo:
+Run a short session in a target repo. For Codex:
 
 ```sh
 codex exec --dangerously-bypass-hook-trust \
   -C /path/to/workspace/example-repo \
   "onmhj smoke test. Reply with the repo name and clean git status only."
 ```
+
+For Claude Code, install or update the plugin, run `/reload-plugins` or start a new session in the target repo, then submit one short prompt. Use `/onmhj:onmhj status` to verify the namespaced command is available. Do not run this authenticated smoke against a production report repo if you do not want a report job scheduled.
 
 Confirm events were captured:
 
@@ -194,11 +204,16 @@ Before writing, `flush` pulls the report repo with `git pull --rebase --autostas
 
 If you bypass `flush` with a custom backfill or direct report-repo edit, run the same pull first. Never generate from a stale checkout of the report repo.
 
-Expected outputs in the report repo:
+Expected outputs after `flush`:
 
 ```txt
 raw/ai-sessions/YYYY-MM-DD.jsonl
 daily/YYYY-MM-DD.md
+```
+
+`ejmhj` and automatic report jobs also add:
+
+```txt
 reports/YYYY-MM-DD.md
 ```
 
@@ -208,13 +223,17 @@ reports/YYYY-MM-DD.md
 
 If `codex plugin marketplace add` says the root has no supported manifest, check that `.agents/plugins/marketplace.json` exists.
 
-If no events appear, open `/hooks`, trust the `onmhj` hooks, and start a new session. `SessionStart` only fires for new sessions.
+If no events appear in Codex, open `/hooks`, trust the `onmhj` hooks, and start a new session. `SessionStart` only fires for new sessions.
 
-If internal logs are empty too, the plugin hook is not running. Reinstall or re-trust the plugin hooks, then start a new Codex session.
+If no events appear in Claude Code, confirm `onmhj@onmhj-local` is installed and enabled, run `/reload-plugins`, then start a new session. Use the namespaced commands `/onmhj:onmhj` and `/onmhj:ejmhj`.
 
-If the hook cannot find Node, install Node or make sure the non-interactive shell used by Codex can resolve `node`.
+If internal logs are empty too, the plugin hook is not running. Update or reinstall the selected platform's plugin, reload its hooks, then start a new session.
+
+If the hook cannot find Node, install Node or make sure the selected plugin runtime can resolve `node` non-interactively.
 
 If Windows Codex reports `SessionStart hook (failed)` or `UserPromptSubmit hook (failed)` with exit code 1 after install, check `.codex/hooks.json`. Version `0.1.10` had POSIX-only hook commands, which PowerShell parsed as invalid syntax. Version `0.1.11` adds `commandWindows` entries for Codex on Windows. Reinstall with `codex plugin add onmhj@onmhj-local`, then start a new session.
+
+If Claude report generation says the native agent failed, run `claude auth status` and confirm the selected `claude` executable resolves in the non-interactive environment. Set `ONMHJ_CLAUDE_EXECUTABLE` when the binary is installed at a nonstandard path, then retry the pending job from a Claude Code session.
 
 ## Claude Code
 

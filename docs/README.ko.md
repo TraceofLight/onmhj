@@ -10,10 +10,10 @@ Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 
 - local-first hook: 세션 이벤트는 git에 바로 쓰지 않고 local JSONL에 append한다.
 - git-backed history: `flush`가 별도 report repo에 raw JSONL과 기계적으로 정리한 daily Markdown을 쓴다.
-- automatic final reports: report job이 Codex 또는 OpenAI 호환 API를 통해 `reports/YYYY-MM-DD.md` 최종보고서를 만든다.
+- automatic final reports: report job이 plugin runtime에 맞는 로컬 Claude Code 또는 Codex 로그인이나 OpenAI 호환 API를 통해 `reports/YYYY-MM-DD.md` 최종보고서를 만든다.
 - multi-device safe: 컴퓨터마다 `deviceId`를 두고, 기존 raw 로그를 pull/merge/dedupe한다.
 - automatic catch-up: background job이 확정되지 않은 날짜를 `confirmedThrough`가 전진할 때까지 재시도한다.
-- agent auth default: 최종보고서 생성은 로컬 Codex 인증을 기본값으로 쓴다.
+- agent auth default: Claude plugin은 로컬 Claude Code 로그인을, Codex plugin과 standalone CLI는 로컬 Codex 로그인을 쓴다. API mode는 공용이다.
 
 ## Install
 
@@ -22,9 +22,9 @@ Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 Agent handoff prompt:
 
 ```txt
-Read docs/installation.md and install onmhj for Codex.
+Read docs/installation.md and install onmhj for this agent platform (Codex or Claude Code).
 Use /path/to/onmhj-storage as the report repo.
-After installing, run the smoke test and flush one report.
+After installing, run the platform smoke test and generate one final report with its documented `ejmhj` command.
 ```
 
 ## Quick Start
@@ -80,6 +80,8 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj import <events.jsonl>` | 정규화된 JSONL bulk import |
 | `onmhj worker` | pending report job 처리 |
 
+plugin command는 같은 CLI로 위임한다. Codex는 `/onmhj ...`, `/ejmhj [date]`를 사용하고 Claude Code는 `/onmhj:onmhj ...`, `/onmhj:ejmhj [date]`를 사용한다.
+
 ## Backfill
 
 수동 이벤트:
@@ -132,6 +134,6 @@ Report repo:
 - `flush`/worker는 쓰기 전에 pull한다. 직접 report repo를 수정하거나 custom backfill을 실행하면 동일한 pull을 수동으로 먼저 해야 한다.
 - prompt capture 기본값은 `preview`다. 필요하면 `full` 또는 `off`를 쓴다.
 - prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
-- agent report는 native Codex executable을 timeout이 있는 비어 있는 read-only workspace에서 실행한다. shell, unified exec, apps, multi-agent, hooks, goals, image, web tool을 비활성화하고 evidence를 신뢰할 수 없는 데이터로 취급한다.
+- native agent report는 격리된 임시 디렉터리에서 timeout을 두고 non-interactive로 실행한다. Codex는 user config와 rule을 무시하고 read-only sandbox에서 불필요한 tool을 비활성화한다. Claude Code는 safe mode에서 customization, tool, browser integration, session persistence를 비활성화한다. evidence는 신뢰할 수 없는 데이터로 취급한다.
 - report repo에 이미 staged change가 있으면 자동 발행을 거부하며 repo 전체 publication lock을 사용한다.
 - report local date는 설정 timezone 기준이고, event spool 파일명은 UTC 기준이다.

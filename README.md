@@ -10,10 +10,10 @@ AI-session worklog capture for Codex and Claude Code.
 
 - Local-first hooks: session events append to local JSONL, not directly to git.
 - Git-backed history: `flush` writes raw JSONL and deterministic daily Markdown into a separate report repo.
-- Automatic final reports: report jobs turn daily evidence into `reports/YYYY-MM-DD.md` through Codex or an OpenAI-compatible API.
+- Automatic final reports: report jobs turn daily evidence into `reports/YYYY-MM-DD.md` through the plugin runtime's local Claude Code or Codex login, or an OpenAI-compatible API.
 - Multi-device safe: each computer has a `deviceId`; existing raw logs are pulled, merged, and deduped.
 - Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.
-- Agent auth by default: final report generation uses local Codex authentication unless API mode is explicitly enabled.
+- Agent auth by default: the Claude plugin uses the local Claude Code login; the Codex plugin and standalone CLI use the local Codex login. API mode is shared.
 
 ## Install
 
@@ -22,9 +22,9 @@ See [docs/installation.md](./docs/installation.md).
 Agent handoff prompt:
 
 ```txt
-Read docs/installation.md and install onmhj for Codex.
+Read docs/installation.md and install onmhj for this agent platform (Codex or Claude Code).
 Use /path/to/onmhj-storage as the report repo.
-After installing, run the smoke test and flush one report.
+After installing, run the platform smoke test and generate one final report with its documented `ejmhj` command.
 ```
 
 ## Quick Start
@@ -80,7 +80,7 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj import <events.jsonl>` | Bulk import normalized JSONL events. |
 | `onmhj worker` | Process pending report jobs in the background. |
 
-The Codex/Claude plugin also exposes `/onmhj ...` and `/ejmhj [date]` command prompts that delegate to these CLI commands.
+Plugin commands delegate to the same CLI: Codex uses `/onmhj ...` and `/ejmhj [date]`; Claude Code uses `/onmhj:onmhj ...` and `/onmhj:ejmhj [date]`.
 
 ## Backfill
 
@@ -134,6 +134,6 @@ A date is confirmed only after its final report passes validation and raw, daily
 - `flush`/worker pulls before writing; direct report-repo edits and custom backfills must do the same manually.
 - Prompt capture defaults to `preview`; use `full` or `off` as needed.
 - Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
-- Agent reports run through the native Codex executable with a timeout in an empty read-only workspace. Shell, unified exec, apps, multi-agent, hooks, goals, image, and web tools are disabled; evidence is treated as untrusted data.
+- Native agent reports run non-interactively in an isolated temporary directory with a bounded timeout. Codex ignores user configuration and rules and runs in a read-only sandbox with report-irrelevant tools disabled. Claude Code runs in safe mode with customizations, tools, browser integration, and session persistence disabled. Evidence is treated as untrusted data.
 - Automatic publication refuses to run when the report repository already has staged changes and uses a repository-wide publication lock.
 - Local report dates use the configured timezone; event spool filenames use UTC.

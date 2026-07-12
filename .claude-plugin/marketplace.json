@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "onmhj",
-      "description": "Record AI-session worklogs locally, then flush daily logs to git.",
+      "description": "Capture AI sessions locally and publish final reports with runtime-native agent auth and ordered retries.",
       "source": "./",
       "category": "productivity"
     }

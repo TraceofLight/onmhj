@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.13 - 2026-07-12
+
+- Added final report generation through the active local Claude Code login.
+- Added Claude-native lifecycle hooks and runtime-native agent selection while preserving Codex and shared API behavior.
+- Refreshed plugin packages and parity documentation, including namespaced Claude commands and ordered retries.
+
 ## 0.1.12 - 2026-07-12
 
 - Added automatic final reports at `reports/YYYY-MM-DD.md` through local Codex auth or an OpenAI-compatible API.
