@@ -494,6 +494,40 @@ test('session ingestion recovers an interrupted replay transaction before parsin
   assert.equal(fs.existsSync(path.join(ingestDir, 'replay-journal.json')), false);
 });
 
+test('the first event writer after a crash recovers replay before appending', async () => {
+  const stateDir = tempDir();
+  const eventDir = path.join(stateDir, 'events');
+  const ingestDir = path.join(stateDir, 'session-ingest');
+  fs.mkdirSync(eventDir, { recursive: true });
+  fs.mkdirSync(ingestDir, { recursive: true });
+  const target = path.join(eventDir, '2026-07-13.jsonl');
+  const backup = path.join(eventDir, '.2026-07-13.jsonl.replay-backup');
+  const temporary = path.join(eventDir, '.2026-07-13.jsonl.replay-next');
+  const oldEvent = { sourceId: 'old-canonical' };
+  fs.writeFileSync(target, JSON.stringify({ sourceId: 'partially-installed' }) + '\n');
+  fs.writeFileSync(backup, JSON.stringify(oldEvent) + '\n');
+  fs.writeFileSync(temporary, JSON.stringify({ sourceId: 'staged-next' }) + '\n');
+  fs.writeFileSync(path.join(ingestDir, 'replay-journal.json'), JSON.stringify({
+    files: [{ target, backup, temporary, existed: true }],
+  }));
+
+  onmhj.upsertEventRecord(cfg(stateDir), {
+    event: 'ManualImport',
+    sourceId: 'manual:after-crash',
+    tsUtc: '2026-07-13T03:00:00.000Z',
+    localDate: '2026-07-13',
+    deviceId: 'test-device',
+    prompt: 'evidence after crash',
+  });
+  await onmhj.ingestSessionFiles(cfg(stateDir), []);
+
+  assert.deepEqual(readEvents(stateDir).map(event => event.sourceId), [
+    'old-canonical',
+    'manual:after-crash',
+  ]);
+  assert.equal(fs.existsSync(path.join(ingestDir, 'replay-journal.json')), false);
+});
+
 test('an active ingestion lock prevents another process from recovering its journal', async () => {
   const stateDir = tempDir();
   const eventDir = path.join(stateDir, 'events');

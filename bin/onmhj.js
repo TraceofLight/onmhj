@@ -484,7 +484,7 @@ function cleanupReplayFiles(files) {
   }
 }
 
-function recoverSessionReplay(cfg) {
+function recoverSessionReplayUnlocked(cfg) {
   const journalFile = replayJournalFile(cfg);
   if (!fs.existsSync(journalFile)) return false;
   const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8'));
@@ -579,7 +579,7 @@ function applyReplayReplacement(cfg, plan) {
     return plan.changed;
   } catch (error) {
     removeFileIfPresent(journalTemp);
-    if (journalWritten) recoverSessionReplay(cfg);
+    if (journalWritten) recoverSessionReplayUnlocked(cfg);
     else cleanupReplayFiles(files);
     throw error;
   }
@@ -748,7 +748,7 @@ async function ingestSessionFile(cfg, source, cursors) {
 }
 
 async function ingestSessionFilesUnlocked(cfg, sources) {
-  recoverSessionReplay(cfg);
+  withEventSpoolLock(cfg, () => {});
   const cursors = readJson(cursorFile(cfg), { version: 1, files: {} });
   cursors.version = SESSION_PARSER_VERSION;
   let changed = 0;
@@ -1062,6 +1062,7 @@ function withEventSpoolLock(cfg, action) {
     Atomics.wait(LOCK_WAIT, 0, 0, LOCK_RETRY_MS);
   }
   try {
+    recoverSessionReplayUnlocked(cfg);
     return action();
   } finally {
     releaseLock(lock);
