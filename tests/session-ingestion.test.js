@@ -122,6 +122,59 @@ test('session ingestion advances its cursor once and does not duplicate events',
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
 });
 
+test('a parser version change restarts stale cursor state', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'codex.jsonl');
+  const records = [{
+    type: 'event_msg',
+    timestamp: '2026-07-13T01:00:00.000Z',
+    payload: { type: 'task_started', turn_id: 'internal-context' },
+  }, {
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: '<codex_internal_context>internal</codex_internal_context>' }],
+    },
+  }, {
+    type: 'event_msg',
+    payload: { type: 'task_complete', last_agent_message: 'internal result' },
+  }];
+  const lines = records.map(JSON.stringify);
+  const prefix = lines.slice(0, 2).join('\n') + '\n';
+  fs.writeFileSync(transcript, lines.join('\n') + '\n');
+
+  const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
+  fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
+  fs.writeFileSync(cursorFile, JSON.stringify({
+    version: 1,
+    files: {
+      [path.resolve(transcript)]: {
+        provider: 'codex',
+        offset: Buffer.byteLength(prefix),
+        parserVersion: 1,
+        state: {
+          turn: {
+            sessionId: '',
+            turnId: 'internal-context',
+            tsUtc: '2026-07-13T01:00:00.000Z',
+            cwd: '',
+            prompt: '',
+            assistantResponse: '',
+          },
+        },
+      },
+    },
+  }));
+
+  const result = await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
+  const cursors = JSON.parse(fs.readFileSync(cursorFile, 'utf8'));
+
+  assert.deepEqual(result, { changed: 0, failures: 0 });
+  assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 2);
+});
+
 test('pending turn is replaced after transcript completion is appended', async () => {
   const stateDir = tempDir();
   const transcript = path.join(stateDir, 'codex.jsonl');

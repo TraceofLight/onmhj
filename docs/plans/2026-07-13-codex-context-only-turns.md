@@ -47,6 +47,8 @@ const CODEX_INTERNAL_CONTEXT_PREFIXES = [
 
 Mark the current turn internal only when every text block in a `response_item/message/user` record matches a known prefix, or when `inter_agent_communication_metadata` is present. At `task_complete`, skip only an internal turn with no prompt. Keep all unknown prompt-less turns fail closed.
 
+Increment the session parser version. When a stored file cursor has an older parser version, restart that file from offset `0` with empty parser state so earlier context markers are available. Stable `sourceId` upsert prevents duplicate events.
+
 **Step 4: Run focused tests to verify GREEN**
 
 Run: `node --test tests/session-parsers.test.js tests/session-ingestion.test.js`

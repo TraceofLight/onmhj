@@ -16,6 +16,7 @@ const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
 const DEFAULT_REPORT_API_KEY_ENV = 'ONMHJ_LLM_API_KEY';
 const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 const REPORT_BACKEND_TIMEOUT_MS = 10 * 60 * 1000;
+const SESSION_PARSER_VERSION = 2;
 
 function usage() {
   return [
@@ -528,11 +529,12 @@ function parserFor(provider) {
 async function ingestSessionFile(cfg, source, cursors) {
   const file = path.resolve(source.path);
   const stored = cursors.files[file] || {};
-  let state = copyJson(stored.state || {});
+  const restart = stored.parserVersion !== SESSION_PARSER_VERSION;
+  let state = copyJson(restart ? {} : (stored.state || {}));
   let changed = 0;
   let failure;
   const parseRecord = parserFor(source.provider);
-  const offset = await readJsonLines(file, stored.offset || 0, async (line, lineStart) => {
+  const offset = await readJsonLines(file, restart ? 0 : (stored.offset || 0), async (line, lineStart) => {
     const before = copyJson(state);
     let record;
     try {
@@ -550,7 +552,7 @@ async function ingestSessionFile(cfg, source, cursors) {
         pathHash: crypto.createHash('sha256').update(file).digest('hex'),
         offset: lineStart,
         affectedDate: affectedDate(cfg, state, file),
-        parserVersion: 1,
+        parserVersion: SESSION_PARSER_VERSION,
         schemaSignature: schemaSignature(record),
         code: err.code || (err instanceof SyntaxError ? 'invalid_json' : 'session_ingest_error'),
       };
@@ -562,7 +564,7 @@ async function ingestSessionFile(cfg, source, cursors) {
     const pending = { ...state.turn, provider: source.provider, status: 'pending' };
     if (upsertEventRecord(cfg, normalizedSessionEvent(cfg, pending))) changed += 1;
   }
-  cursors.files[file] = { provider: source.provider, offset, parserVersion: 1, state };
+  cursors.files[file] = { provider: source.provider, offset, parserVersion: SESSION_PARSER_VERSION, state };
   const quarantine = quarantineFile(cfg, file);
   if (failure) writeJson(quarantine, failure);
   else if (fs.existsSync(quarantine)) fs.unlinkSync(quarantine);
@@ -571,6 +573,7 @@ async function ingestSessionFile(cfg, source, cursors) {
 
 async function ingestSessionFiles(cfg, sources) {
   const cursors = readJson(cursorFile(cfg), { version: 1, files: {} });
+  cursors.version = SESSION_PARSER_VERSION;
   let changed = 0;
   let failures = 0;
   for (const source of sources) {
