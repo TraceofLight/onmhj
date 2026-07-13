@@ -73,7 +73,7 @@ Run `/reload-plugins` in the current Claude Code session, or start a new session
 Register the external storage repo:
 
 ```sh
-node /path/to/onmhj/bin/onmhj.js register /path/to/onmhj-storage --prompt=preview --timezone=Asia/Seoul
+node /path/to/onmhj/bin/onmhj.js register /path/to/onmhj-storage --timezone=Asia/Seoul
 ```
 
 Check config:
@@ -82,10 +82,10 @@ Check config:
 node /path/to/onmhj/bin/onmhj.js status
 ```
 
-Update prompt or timezone without changing the registered repo:
+Update timezone without changing the registered repo:
 
 ```sh
-node /path/to/onmhj/bin/onmhj.js config --timezone=Asia/Seoul --prompt=preview
+node /path/to/onmhj/bin/onmhj.js config --timezone=Asia/Seoul
 ```
 
 Set a stable device id for this computer. It defaults to the hostname when unset:
@@ -173,11 +173,9 @@ Each imported event gets the configured `deviceId` unless the JSONL already incl
 
 ## Privacy
 
-`onmhj` redacts common token, password, secret, API key, bearer token, and private-key patterns before writing prompt text to local events or report repos.
+`onmhj` stores complete canonical user prompts and final assistant answers after redacting common token, password, secret, API key, bearer token, and private-key patterns. Reasoning fields and tool arguments from compatible API captures are never persisted.
 
-`--prompt=full` stores redacted canonical prompts and final answers. `preview` stores the first 300 characters of each canonical value. `off` stores session metadata only. Reasoning fields and tool arguments from compatible API captures are never persisted.
-
-This is a best-effort guard, not a full secret scanner. Keep `--prompt=preview` as the default. Use `--prompt=off` when working with credentials-heavy sessions.
+Redaction is a best-effort guard, not a full secret scanner. Do not include credentials in prompts.
 
 When asking an agent to summarize or flush reports, include this instruction:
 

@@ -33,7 +33,7 @@ After installing, run the platform smoke test and generate one final report with
 After install, register the report repo:
 
 ```sh
-node bin/onmhj.js register /path/to/worklog-git-repo --prompt=preview --timezone=Asia/Seoul
+node bin/onmhj.js register /path/to/worklog-git-repo --timezone=Asia/Seoul
 ```
 
 Set the device, owner, report language, and auth policy:
@@ -107,7 +107,7 @@ An OpenAI-compatible capture record contains `provider`, `tsUtc`, `cwd`, and the
 
 ## Canonical Sessions
 
-`onmhj sessions` reads Codex and Claude transcripts incrementally. Each canonical `AISessionTurn` has a stable `sourceId`, so a completed turn replaces its pending form and duplicate hook previews for that session are excluded. `full` stores redacted canonical prompts and answers, `preview` stores their first 300 characters, and `off` stores metadata only.
+`onmhj sessions` reads Codex and Claude transcripts incrementally. Each canonical `AISessionTurn` has a stable `sourceId`, so a completed turn replaces its pending form and duplicate hook previews for that session are excluded. Canonical user prompts and final answers are stored completely after redaction.
 
 Set `onmhj config --auto-report=false` to stop `SessionStart` from scheduling report jobs. `onmhj sessions --publish` then pulls the registered repo, blocks on any unresolved quarantine entry, merges every local date into `raw/ai-sessions` by `sourceId`, and creates one commit and push without changing `daily/`, `reports/`, report jobs, or confirmations.
 
@@ -145,7 +145,7 @@ A date is confirmed only after its final report passes validation and raw, daily
 - Hooks append locally only.
 - Git sync and push run only during `sessions --publish`, `flush`, or worker-driven report jobs.
 - `flush`/worker pulls before writing; direct report-repo edits and custom backfills must do the same manually.
-- Prompt capture defaults to `preview`; use `full` or `off` as needed.
+- Canonical prompts and final answers are captured completely; reasoning and tool arguments are not persisted.
 - Final-report regeneration must preserve every prior non-heading report line; destructive output is rejected before the report or confirmation is written.
 - Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
 - Native agent reports run non-interactively in an isolated temporary directory with a bounded timeout. Codex ignores user configuration and rules and runs in a read-only sandbox with report-irrelevant tools disabled. Claude Code runs in safe mode with customizations, tools, browser integration, and session persistence disabled. Evidence is treated as untrusted data.

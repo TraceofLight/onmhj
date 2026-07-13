@@ -16,7 +16,7 @@ The transcript parser continues to exclude reasoning and tool arguments. Secret 
 
 CLI help no longer exposes prompt capture modes. New `--prompt` configuration requests fail as unknown arguments. Existing configuration files remain readable because obsolete `promptMode` values are ignored.
 
-Historical preview records remain unchanged until their source transcripts are replayed. Recollection creates canonical full `AISessionTurn` records and supersedes legacy prompt-only records through the existing stable `sourceId` merge.
+Historical preview records remain unchanged until their source transcripts are replayed. Incrementing the parser version restarts existing cursors so the first updated collection replays available transcripts. Recollection creates canonical full `AISessionTurn` records and supersedes legacy prompt-only records through the existing stable `sourceId` merge.
 
 ## Verification
 

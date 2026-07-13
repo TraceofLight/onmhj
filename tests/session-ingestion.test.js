@@ -12,7 +12,7 @@ function tempDir() {
 }
 
 function cfg(stateDir) {
-  return { stateDir, timeZone: 'UTC', deviceId: 'test-device', promptMode: 'full' };
+  return { stateDir, timeZone: 'UTC', deviceId: 'test-device' };
 }
 
 function readEvents(stateDir, date = '2026-07-13') {
@@ -133,6 +133,41 @@ test('session ingestion advances its cursor once and does not duplicate events',
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
 });
 
+test('legacy prompt modes cannot truncate canonical turns', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'codex.jsonl');
+  const prompt = `task-${'p'.repeat(400)}`;
+  const assistantResponse = `answer-${'a'.repeat(400)}`;
+  fs.writeFileSync(transcript, [{
+    type: 'session_meta',
+    timestamp: '2026-07-13T01:00:00.000Z',
+    payload: { session_id: 'lossless-session', cwd: 'D:\\work\\repo' },
+  }, {
+    type: 'event_msg',
+    timestamp: '2026-07-13T01:00:01.000Z',
+    payload: { type: 'task_started', turn_id: 'lossless-turn' },
+  }, {
+    type: 'event_msg',
+    timestamp: '2026-07-13T01:00:02.000Z',
+    payload: { type: 'user_message', message: prompt },
+  }, {
+    type: 'event_msg',
+    timestamp: '2026-07-13T01:00:03.000Z',
+    payload: { type: 'task_complete', last_agent_message: assistantResponse },
+  }].map(JSON.stringify).join('\n') + '\n');
+
+  await onmhj.ingestSessionFiles({ ...cfg(stateDir), promptMode: 'off' }, [{
+    provider: 'codex',
+    path: transcript,
+  }]);
+
+  const [event] = readEvents(stateDir);
+  assert.equal(event.prompt, prompt);
+  assert.equal(event.assistantResponse, assistantResponse);
+  assert.equal(Object.hasOwn(event, 'promptPreview'), false);
+  assert.equal(Object.hasOwn(event, 'assistantResponsePreview'), false);
+});
+
 test('a parser version change restarts stale cursor state', async () => {
   const stateDir = tempDir();
   const transcript = path.join(stateDir, 'codex.jsonl');
@@ -183,7 +218,7 @@ test('a parser version change restarts stale cursor state', async () => {
 
   assert.deepEqual(result, { changed: 0, failures: 0 });
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
-  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 3);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 4);
 });
 
 test('pending turn is replaced after transcript completion is appended', async () => {
@@ -305,7 +340,6 @@ test('import normalizes GLM, DeepSeek, and vLLM captures without reasoning or ar
   const configFile = path.join(stateDir, 'config.json');
   fs.writeFileSync(configFile, JSON.stringify({
     stateDir,
-    promptMode: 'full',
     timeZone: 'UTC',
     deviceId: 'test-device',
   }));
@@ -324,4 +358,36 @@ test('import normalizes GLM, DeepSeek, and vLLM captures without reasoning or ar
   assert.equal(events[2].assistantResponse, 'vllm answer');
   assert.equal(serialized.includes('private'), false);
   assert.equal(serialized.includes('arguments'), false);
+});
+
+test('manual import never truncates supplied work evidence', () => {
+  const stateDir = tempDir();
+  const configFile = path.join(stateDir, 'config.json');
+  const importFile = path.join(stateDir, 'import.jsonl');
+  const text = `task-${'t'.repeat(400)}`;
+  const legacyPreview = `legacy-${'p'.repeat(400)}`;
+  fs.writeFileSync(configFile, JSON.stringify({
+    stateDir,
+    timeZone: 'UTC',
+    deviceId: 'test-device',
+  }));
+  fs.writeFileSync(importFile, [{
+    tsUtc: '2026-07-13T01:00:00.000Z',
+    sourceId: 'manual:full-text',
+    text,
+  }, {
+    tsUtc: '2026-07-13T01:00:01.000Z',
+    sourceId: 'manual:legacy-preview',
+    promptPreview: legacyPreview,
+  }].map(JSON.stringify).join('\n') + '\n');
+
+  childProcess.execFileSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'onmhj.js'),
+    'import',
+    importFile,
+  ], { env: { ...process.env, ONMHJ_CONFIG: configFile } });
+
+  const events = readEvents(stateDir);
+  assert.equal(events[0].prompt, text);
+  assert.equal(events[1].promptPreview, legacyPreview);
 });

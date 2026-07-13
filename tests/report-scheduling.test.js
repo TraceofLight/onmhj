@@ -24,7 +24,6 @@ function createConfig() {
     configPath: path.join(tmp, 'config.json'),
     repoPath: path.join(tmp, 'repo'),
     stateDir: path.join(tmp, 'state'),
-    promptMode: 'preview',
     timeZone: 'Asia/Seoul',
     deviceId: 'windows-device',
     reportLanguage: 'ko',

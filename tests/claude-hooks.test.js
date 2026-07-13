@@ -80,7 +80,7 @@ test('Claude handlers execute and record their hook events', t => {
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
   const stateDir = path.join(tmp, 'state');
   const configPath = path.join(tmp, 'config.json');
-  fs.writeFileSync(configPath, JSON.stringify({ stateDir, promptMode: 'full' }));
+  fs.writeFileSync(configPath, JSON.stringify({ stateDir }));
 
   const env = {
     ...process.env,

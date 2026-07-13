@@ -90,7 +90,6 @@ function createRuntime() {
   return {
     repoPath,
     stateDir,
-    promptMode: 'preview',
     timeZone: 'Asia/Seoul',
     deviceId: 'test-device',
     reportLanguage: 'ko',

@@ -33,7 +33,7 @@ After installing, run the platform smoke test and generate one final report with
 설치 후 report repo를 등록한다:
 
 ```sh
-node bin/onmhj.js register /path/to/worklog-git-repo --prompt=preview --timezone=Asia/Seoul
+node bin/onmhj.js register /path/to/worklog-git-repo --timezone=Asia/Seoul
 ```
 
 device, owner, report language, auth 정책을 설정한다:
@@ -107,7 +107,7 @@ OpenAI-compatible capture record는 `provider`, `tsUtc`, `cwd`, 전체 `request`
 
 ## Canonical Session
 
-`onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 `AISessionTurn`은 안정적인 `sourceId`를 사용하므로 completed turn이 pending turn을 교체하고, 같은 session의 중복 hook preview는 제외한다. `full`은 redaction한 canonical prompt와 answer 전체, `preview`는 각각 앞 300자, `off`는 metadata만 저장한다.
+`onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 `AISessionTurn`은 안정적인 `sourceId`를 사용하므로 completed turn이 pending turn을 교체하고, 같은 session의 중복 hook preview는 제외한다. Canonical user prompt와 최종 answer는 redaction 후 전체를 저장한다.
 
 `onmhj config --auto-report=false`를 설정하면 `SessionStart`가 report job을 예약하지 않는다. 이후 `onmhj sessions --publish`는 registered repo를 pull하고 unresolved quarantine이 없는지 확인한 뒤, 모든 local date를 `sourceId` 기준으로 `raw/ai-sessions`에 병합해 커밋과 push를 각각 한 번만 수행한다. `daily/`, `reports/`, report job, confirmation은 변경하지 않는다.
 
@@ -145,7 +145,7 @@ Report repo:
 - hook은 local append만 한다.
 - git sync/push는 `sessions --publish`, `flush`, 또는 worker 기반 report job에서만 실행한다.
 - `flush`/worker는 쓰기 전에 pull한다. 직접 report repo를 수정하거나 custom backfill을 실행하면 동일한 pull을 수동으로 먼저 해야 한다.
-- prompt capture 기본값은 `preview`다. 필요하면 `full` 또는 `off`를 쓴다.
+- Canonical prompt와 최종 answer는 전체를 수집하며 reasoning과 tool argument는 저장하지 않는다.
 - 최종보고서 재생성은 기존 report의 모든 비제목 줄을 보존해야 하며, 파괴적인 출력은 report 또는 confirmation을 쓰기 전에 거부한다.
 - prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
 - native agent report는 격리된 임시 디렉터리에서 timeout을 두고 non-interactive로 실행한다. Codex는 user config와 rule을 무시하고 read-only sandbox에서 불필요한 tool을 비활성화한다. Claude Code는 safe mode에서 customization, tool, browser integration, session persistence를 비활성화한다. evidence는 신뢰할 수 없는 데이터로 취급한다.

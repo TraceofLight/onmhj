@@ -16,7 +16,7 @@ const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
 const DEFAULT_REPORT_API_KEY_ENV = 'ONMHJ_LLM_API_KEY';
 const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 const REPORT_BACKEND_TIMEOUT_MS = 10 * 60 * 1000;
-const SESSION_PARSER_VERSION = 3;
+const SESSION_PARSER_VERSION = 4;
 const RAW_SESSION_COMMIT_MESSAGE = `data(sessions): publish raw AI sessions
 
 작업 의도:
@@ -31,8 +31,8 @@ function usage() {
   return [
     'Usage:',
     '  onmhj hook <event>',
-    '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api]',
-    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
+    '  onmhj register <git-repo-path> [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api]',
+    '  onmhj config [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj sessions [--publish] [--no-push]',
@@ -62,7 +62,6 @@ function config() {
   return {
     stateDir: cfg.stateDir || DEFAULT_STATE_DIR,
     repoPath: cfg.repoPath || '',
-    promptMode: cfg.promptMode || 'preview',
     timeZone: normalizeTimeZone(cfg.timeZone),
     deviceId: cfg.deviceId || defaultDeviceId(),
     ownerName: cfg.ownerName || globalGitConfig('user.name') || os.userInfo().username,
@@ -192,12 +191,10 @@ function isGitRepo(dir) {
   return Boolean(findGitRoot(dir));
 }
 
-function parsePrompt(input, mode) {
-  if (mode === 'off') return {};
+function parsePrompt(input) {
   const prompt = String(input.prompt || '');
   if (!prompt) return {};
-  if (mode === 'full') return { prompt: redactSecrets(prompt) };
-  return { promptPreview: redactSecrets(prompt).slice(0, 300) };
+  return { prompt: redactSecrets(prompt) };
 }
 
 function redactSecrets(value) {
@@ -245,7 +242,7 @@ function hook(event) {
       gitRoot,
       gitBranch: gitRoot ? gitValue(['branch', '--show-current'], gitRoot) : '',
       sessionId: input.session_id || input.sessionId || '',
-      ...parsePrompt(input, cfg.promptMode),
+      ...parsePrompt(input),
     };
     appendLine(eventFile(cfg, utcDateKey(now)), JSON.stringify(record));
     if (input.transcript_path) rememberSessionSource(cfg, input.transcript_path);
@@ -282,7 +279,7 @@ function parseJsonFromString(raw) {
 function parseOptions(args) {
   const opts = {};
   for (const arg of args) {
-    if (arg.startsWith('--prompt=')) opts.promptMode = arg.slice('--prompt='.length);
+    if (arg.startsWith('--prompt=')) throw new Error('prompt capture is always full');
     if (arg.startsWith('--timezone=')) opts.timeZone = arg.slice('--timezone='.length);
     if (arg.startsWith('--device-id=')) opts.deviceId = arg.slice('--device-id='.length);
     if (arg.startsWith('--owner-name=')) opts.ownerName = arg.slice('--owner-name='.length);
@@ -316,7 +313,6 @@ function register(repoPath, opts) {
   validateConfigOptions(opts);
   const cfg = config();
   cfg.repoPath = resolved;
-  if (opts.promptMode) cfg.promptMode = opts.promptMode;
   if (opts.timeZone) cfg.timeZone = opts.timeZone;
   applyDeviceConfig(cfg, opts);
   applyOwnerConfig(cfg, opts);
@@ -325,7 +321,6 @@ function register(repoPath, opts) {
   writeJson(CONFIG_PATH, cfg);
   writeInternalLog(cfg, 'register', {
     repoPath: resolved,
-    promptMode: cfg.promptMode,
     timeZone: cfg.timeZone,
     deviceId: cfg.deviceId,
     ownerName: cfg.ownerName,
@@ -338,9 +333,6 @@ function register(repoPath, opts) {
 }
 
 function validateConfigOptions(opts) {
-  if (opts.promptMode && !['preview', 'full', 'off'].includes(opts.promptMode)) {
-    throw new Error('prompt mode must be preview, full, or off');
-  }
   if (opts.timeZone) localDateKey(new Date(), opts.timeZone);
   if (opts.deviceId && !/^[A-Za-z0-9_.-]+$/.test(opts.deviceId)) {
     throw new Error('device id must contain only letters, numbers, dot, underscore, or dash');
@@ -402,11 +394,10 @@ function reportRuntime(cfg) {
 
 function configure(opts) {
   validateConfigOptions(opts);
-  if (!opts.promptMode && !opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
+  if (!opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
     throw new Error(usage());
   }
   const cfg = config();
-  if (opts.promptMode) cfg.promptMode = opts.promptMode;
   if (opts.timeZone) cfg.timeZone = opts.timeZone;
   applyDeviceConfig(cfg, opts);
   applyOwnerConfig(cfg, opts);
@@ -414,7 +405,6 @@ function configure(opts) {
   applyReportConfig(cfg, opts);
   writeJson(CONFIG_PATH, cfg);
   writeInternalLog(cfg, 'config', {
-    promptMode: cfg.promptMode,
     timeZone: cfg.timeZone,
     deviceId: cfg.deviceId,
     ownerName: cfg.ownerName,
@@ -423,7 +413,7 @@ function configure(opts) {
     reportLanguage: cfg.reportLanguage,
     reportAuth: cfg.reportAuth,
   });
-  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} autoReport=${cfg.autoReport} reportLanguage=${cfg.reportLanguage} reportAuth=${cfg.reportAuth}\n`);
+  process.stdout.write(`configured timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} autoReport=${cfg.autoReport} reportLanguage=${cfg.reportLanguage} reportAuth=${cfg.reportAuth}\n`);
 }
 
 function eventDedupeKey(event) {
@@ -515,13 +505,8 @@ function normalizedSessionEvent(cfg, turn) {
   };
   if (turn.model) event.model = turn.model;
   if (turn.toolNames && turn.toolNames.length) event.toolNames = turn.toolNames;
-  if (cfg.promptMode === 'full') {
-    event.prompt = turn.prompt;
-    if (turn.assistantResponse) event.assistantResponse = turn.assistantResponse;
-  } else if (cfg.promptMode !== 'off') {
-    event.promptPreview = String(turn.prompt || '').slice(0, 300);
-    if (turn.assistantResponse) event.assistantResponsePreview = turn.assistantResponse.slice(0, 300);
-  }
+  event.prompt = turn.prompt;
+  if (turn.assistantResponse) event.assistantResponse = turn.assistantResponse;
   return event;
 }
 
@@ -698,9 +683,9 @@ function normalizeImportedEvent(raw, cfg) {
   if (raw.source) event.source = String(raw.source);
   if (raw.sourceId) event.sourceId = String(raw.sourceId);
   if (raw.prompt) event.prompt = redactSecrets(raw.prompt);
-  if (raw.promptPreview) event.promptPreview = redactSecrets(raw.promptPreview).slice(0, 300);
+  if (raw.promptPreview) event.promptPreview = redactSecrets(raw.promptPreview);
   if (!event.prompt && !event.promptPreview && raw.text) {
-    event.promptPreview = redactSecrets(raw.text).slice(0, 300);
+    event.prompt = redactSecrets(raw.text);
   }
   return event;
 }
@@ -1623,7 +1608,6 @@ function status() {
     `internalLog: ${logFile}`,
     `workerLog: ${workerLogFile(cfg)}`,
     `repo: ${cfg.repoPath || '(not registered)'}`,
-    `prompt: ${cfg.promptMode}`,
     `timeZone: ${cfg.timeZone}`,
     `deviceId: ${cfg.deviceId}`,
     `ownerName: ${cfg.ownerName}`,
@@ -1652,7 +1636,7 @@ async function selftest() {
   run('git', ['init'], repo);
   run('git', ['config', 'user.email', 'onmhj@example.local'], repo);
   run('git', ['config', 'user.name', 'onmhj'], repo);
-  writeJson(CONFIG_PATH, { repoPath: repo, stateDir: state, promptMode: 'preview', timeZone: 'Asia/Seoul', reportLanguage: 'ko' });
+  writeJson(CONFIG_PATH, { repoPath: repo, stateDir: state, timeZone: 'Asia/Seoul', reportLanguage: 'ko' });
   const transcript = path.join(tmp, 'codex-session.jsonl');
   fs.writeFileSync(transcript, [
     { timestamp: '2026-07-09T01:00:00.000Z', type: 'session_meta', payload: { session_id: 'selftest-session', cwd: repo } },
@@ -1757,9 +1741,9 @@ async function selftest() {
   const internal = fs.readFileSync(internalLogFile(config()), 'utf8');
   if (!internal.includes('"action":"hook_start"')) throw new Error('hook_start log missing');
   if (!internal.includes('"action":"hook_success"')) throw new Error('hook_success log missing');
-  configure({ timeZone: 'UTC', promptMode: 'off' });
+  configure({ timeZone: 'UTC' });
   const updated = config();
-  if (updated.timeZone !== 'UTC' || updated.promptMode !== 'off') throw new Error('config update failed');
+  if (updated.timeZone !== 'UTC') throw new Error('config update failed');
   configure({ deviceId: 'test-device' });
   if (config().deviceId !== 'test-device') throw new Error('device config failed');
   configure({ reportLanguage: 'en' });

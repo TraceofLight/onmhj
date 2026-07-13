@@ -49,6 +49,8 @@ Make prompt parsing always return `{ prompt: redactSecrets(prompt) }`. Remove th
 
 Always write redacted `prompt` and present `assistantResponse` fields in `normalizedSessionEvent`. Remove preview/off branching.
 
+Increment the session parser version so existing device cursors replay available transcripts with the lossless contract.
+
 **Step 3: Remove configuration surface**
 
 Remove `promptMode` from config defaults, registration, configuration, status, usage, logs, and selftest. Reject `--prompt=*` with `prompt capture is always full` so old automation fails visibly instead of silently losing content.

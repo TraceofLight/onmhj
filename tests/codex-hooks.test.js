@@ -72,13 +72,61 @@ test('Codex Windows hook commands run in PowerShell', { skip: process.platform !
   }
 });
 
+test('legacy preview config cannot truncate hook prompts', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-lossless-hook-'));
+  const stateDir = path.join(tmp, 'state');
+  const configPath = path.join(tmp, 'config.json');
+  const prompt = `task-${'p'.repeat(400)}`;
+  fs.writeFileSync(configPath, JSON.stringify({
+    stateDir,
+    promptMode: 'preview',
+    timeZone: 'UTC',
+    deviceId: 'test-device',
+  }));
+
+  const result = childProcess.spawnSync(process.execPath, [
+    path.join(root, 'bin', 'onmhj.js'),
+    'hook',
+    'UserPromptSubmit',
+  ], {
+    cwd: root,
+    env: { ...process.env, ONMHJ_CONFIG: configPath },
+    input: JSON.stringify({ cwd: root, session_id: 'test-session', prompt }),
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const eventFile = path.join(stateDir, 'events', fs.readdirSync(path.join(stateDir, 'events'))[0]);
+  const event = JSON.parse(fs.readFileSync(eventFile, 'utf8').trim());
+  assert.equal(event.prompt, prompt);
+  assert.equal(Object.hasOwn(event, 'promptPreview'), false);
+});
+
+test('prompt capture mode CLI is rejected', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-lossless-cli-'));
+  const configPath = path.join(tmp, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({ stateDir: path.join(tmp, 'state') }));
+
+  const result = childProcess.spawnSync(process.execPath, [
+    path.join(root, 'bin', 'onmhj.js'),
+    'config',
+    '--prompt=off',
+  ], {
+    cwd: root,
+    env: { ...process.env, ONMHJ_CONFIG: configPath },
+    encoding: 'utf8',
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /prompt capture is always full/);
+});
+
 test('selftest does not overwrite selected user config', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-selftest-'));
   const configPath = path.join(tmp, 'config.json');
   const userConfig = {
     repoPath: path.join(tmp, 'user-repo'),
     stateDir: path.join(tmp, 'user-state'),
-    promptMode: 'preview',
     timeZone: 'Asia/Seoul',
     deviceId: 'user-device',
   };
