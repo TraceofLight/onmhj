@@ -15,6 +15,9 @@ let CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config',
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
 const DEFAULT_REPORT_API_KEY_ENV = 'ONMHJ_LLM_API_KEY';
 const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
+const EVENT_SPOOL_LOCK_TIMEOUT_MS = 10 * 1000;
+const LOCK_RETRY_MS = 25;
+const LOCK_WAIT = new Int32Array(new SharedArrayBuffer(4));
 const REPORT_BACKEND_TIMEOUT_MS = 10 * 60 * 1000;
 const SESSION_PARSER_VERSION = 5;
 const RAW_SESSION_COMMIT_MESSAGE = `data(sessions): publish raw AI sessions
@@ -244,7 +247,7 @@ function hook(event) {
       sessionId: input.session_id || input.sessionId || '',
       ...parsePrompt(input),
     };
-    appendLine(eventFile(cfg, utcDateKey(now)), JSON.stringify(record));
+    appendEventRecord(cfg, record);
     if (input.transcript_path) rememberSessionSource(cfg, input.transcript_path);
     writeInternalLog(cfg, 'hook_success', {
       event,
@@ -429,7 +432,7 @@ function eventDedupeKey(event) {
   ].join(':');
 }
 
-function appendEventRecord(cfg, event) {
+function appendEventRecordUnlocked(cfg, event) {
   const file = eventFile(cfg, utcDateKey(new Date(event.tsUtc || event.ts)));
   const key = eventDedupeKey(event);
   if (key && loadEvents(file).some(existing => eventDedupeKey(existing) === key)) return false;
@@ -437,8 +440,12 @@ function appendEventRecord(cfg, event) {
   return true;
 }
 
-function upsertEventRecord(cfg, event) {
-  if (!event.sourceId) return appendEventRecord(cfg, event);
+function appendEventRecord(cfg, event) {
+  return withEventSpoolLock(cfg, () => appendEventRecordUnlocked(cfg, event));
+}
+
+function upsertEventRecordUnlocked(cfg, event) {
+  if (!event.sourceId) return appendEventRecordUnlocked(cfg, event);
   const file = eventFile(cfg, utcDateKey(new Date(event.tsUtc || event.ts)));
   const clean = sanitizeEvent(event);
   const events = loadEvents(file);
@@ -451,6 +458,10 @@ function upsertEventRecord(cfg, event) {
   events[index] = clean;
   fs.writeFileSync(file, events.map(item => JSON.stringify(item)).join('\n') + '\n');
   return true;
+}
+
+function upsertEventRecord(cfg, event) {
+  return withEventSpoolLock(cfg, () => upsertEventRecordUnlocked(cfg, event));
 }
 
 function isTranscriptSessionEvent(event) {
@@ -575,7 +586,9 @@ function applyReplayReplacement(cfg, plan) {
 }
 
 function replaceLocalSessionEvents(cfg, provider, sessionIds, events) {
-  return applyReplayReplacement(cfg, replayReplacementPlan(cfg, provider, sessionIds, events));
+  return withEventSpoolLock(cfg, () => (
+    applyReplayReplacement(cfg, replayReplacementPlan(cfg, provider, sessionIds, events))
+  ));
 }
 
 function sessionIngestDir(cfg) {
@@ -584,6 +597,10 @@ function sessionIngestDir(cfg) {
 
 function sessionIngestLockFile(cfg) {
   return path.join(sessionIngestDir(cfg), 'ingestion.lock');
+}
+
+function eventSpoolLockFile(cfg) {
+  return path.join(sessionIngestDir(cfg), 'event-spool.lock');
 }
 
 function cursorFile(cfg) {
@@ -1034,6 +1051,20 @@ function acquireLock(file) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function withEventSpoolLock(cfg, action) {
+  const lock = eventSpoolLockFile(cfg);
+  const deadline = Date.now() + EVENT_SPOOL_LOCK_TIMEOUT_MS;
+  while (!acquireLock(lock)) {
+    if (Date.now() >= deadline) throw new Error('event spool is busy');
+    Atomics.wait(LOCK_WAIT, 0, 0, LOCK_RETRY_MS);
+  }
+  try {
+    return action();
+  } finally {
+    releaseLock(lock);
   }
 }
 

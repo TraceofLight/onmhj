@@ -284,16 +284,25 @@ test('a successful parser replay replaces stale local turns in its session scope
 
   const stagedModes = [];
   const writeFileSync = fs.writeFileSync;
+  const renameSync = fs.renameSync;
+  const replayLocks = [];
   fs.writeFileSync = (file, data, options) => {
     if (String(file).startsWith(eventDir + path.sep) && String(file).includes('.replay-')) {
       stagedModes.push(options && options.mode);
     }
     return writeFileSync(file, data, options);
   };
+  fs.renameSync = (oldPath, newPath) => {
+    if (String(oldPath).startsWith(eventDir + path.sep) && String(newPath).endsWith('.jsonl')) {
+      replayLocks.push(fs.existsSync(path.join(stateDir, 'session-ingest', 'event-spool.lock')));
+    }
+    return renameSync(oldPath, newPath);
+  };
   try {
     await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'claude', path: transcript }]);
   } finally {
     fs.writeFileSync = writeFileSync;
+    fs.renameSync = renameSync;
   }
 
   const events = readEvents(stateDir);
@@ -305,6 +314,8 @@ test('a successful parser replay replaces stale local turns in its session scope
   assert.equal(events.find(event => event.sourceId.startsWith('claude:')).prompt, 'real human task');
   assert.ok(stagedModes.length > 0);
   assert.ok(stagedModes.every(mode => mode === 0o600));
+  assert.ok(replayLocks.length > 0);
+  assert.ok(replayLocks.every(Boolean));
   assert.equal(cursor.parserVersion, 5);
   assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
 });
@@ -507,6 +518,44 @@ test('an active ingestion lock prevents another process from recovering its jour
 
   assert.equal(fs.existsSync(target), true);
   assert.equal(fs.existsSync(journal), true);
+});
+
+test('an event writer waits for the replay spool lock instead of losing its event', async () => {
+  const stateDir = tempDir();
+  const ingestDir = path.join(stateDir, 'session-ingest');
+  const lock = path.join(ingestDir, 'event-spool.lock');
+  fs.mkdirSync(ingestDir, { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }) + '\n');
+  const event = {
+    event: 'ManualImport',
+    sourceId: 'manual:concurrent-writer',
+    tsUtc: '2026-07-13T03:00:00.000Z',
+    localDate: '2026-07-13',
+    deviceId: 'test-device',
+    prompt: 'concurrent evidence',
+  };
+  const script = [
+    "const onmhj = require(process.argv[1]);",
+    'onmhj.upsertEventRecord(JSON.parse(process.argv[2]), JSON.parse(process.argv[3]));',
+  ].join('');
+  const child = childProcess.spawn(process.execPath, [
+    '-e',
+    script,
+    path.join(__dirname, '..', 'bin', 'onmhj.js'),
+    JSON.stringify(cfg(stateDir)),
+    JSON.stringify(event),
+  ], { stdio: 'ignore' });
+  const completed = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', code => code === 0 ? resolve() : reject(new Error(`writer exited ${code}`)));
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(fs.existsSync(path.join(stateDir, 'events', '2026-07-13.jsonl')), false);
+  fs.unlinkSync(lock);
+  await completed;
+
+  assert.equal(readEvents(stateDir)[0].sourceId, 'manual:concurrent-writer');
 });
 
 test('pending turn is replaced after transcript completion is appended', async () => {
