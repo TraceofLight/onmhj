@@ -89,6 +89,26 @@ test('Codex parser skips a prompt-less inter-agent turn', () => {
   assert.equal(state.turn, undefined);
 });
 
+test('Codex parser skips a compaction-only turn', () => {
+  const { events, state } = parse([
+    {
+      type: 'event_msg',
+      timestamp: '2026-07-13T01:00:00.000Z',
+      payload: { type: 'task_started', turn_id: 'compaction' },
+    },
+    { type: 'compacted', payload: {} },
+    { type: 'event_msg', payload: { type: 'token_count' } },
+    { type: 'event_msg', payload: { type: 'context_compacted' } },
+    {
+      type: 'event_msg',
+      payload: { type: 'task_complete', last_agent_message: 'compacted context' },
+    },
+  ], parseCodexRecord);
+
+  assert.deepEqual(events, []);
+  assert.equal(state.turn, undefined);
+});
+
 test('Codex parser skips an empty prompt-less no-op turn', () => {
   const { events, state } = parse([
     {

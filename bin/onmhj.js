@@ -16,7 +16,7 @@ const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
 const DEFAULT_REPORT_API_KEY_ENV = 'ONMHJ_LLM_API_KEY';
 const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 const REPORT_BACKEND_TIMEOUT_MS = 10 * 60 * 1000;
-const SESSION_PARSER_VERSION = 2;
+const SESSION_PARSER_VERSION = 3;
 const RAW_SESSION_COMMIT_MESSAGE = `data(sessions): publish raw AI sessions
 
 작업 의도:

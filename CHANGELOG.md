@@ -4,7 +4,7 @@
 
 - Added deterministic Codex, Claude, and OpenAI-compatible session-turn normalization with final assistant evidence.
 - Added incremental transcript cursors, metadata-only quarantine, retry, and affected-date confirmation blocking.
-- Skipped known Codex internal/context-only and empty no-op turns, and replayed stale file cursors after parser upgrades.
+- Skipped known Codex internal/context-only, compaction-only, and empty no-op turns, and replayed stale file cursors after parser upgrades.
 - Prevented final-report regeneration from removing prior report content.
 - Hid Windows worker, report-agent, and git subprocess windows during background report generation.
 - Added an `autoReport` gate and one-commit raw-only multi-date session publishing.

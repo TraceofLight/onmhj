@@ -183,7 +183,7 @@ test('a parser version change restarts stale cursor state', async () => {
 
   assert.deepEqual(result, { changed: 0, failures: 0 });
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
-  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 2);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 3);
 });
 
 test('pending turn is replaced after transcript completion is appended', async () => {

@@ -40,6 +40,8 @@ function parseCodexRecord(record, previous = {}) {
   }
 
   if (record.type === 'inter_agent_communication_metadata' ||
+      record.type === 'compacted' ||
+      (record.type === 'event_msg' && payload.type === 'context_compacted') ||
       (record.type === 'response_item' && codexContextOnlyUser(payload))) {
     if (state.turn) state.turn = { ...state.turn, internal: true };
     return { state, events: [] };
