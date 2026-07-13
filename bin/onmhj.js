@@ -192,6 +192,7 @@ function sanitizeEvent(event) {
   const clean = { ...event };
   if (clean.prompt) clean.prompt = redactSecrets(clean.prompt);
   if (clean.promptPreview) clean.promptPreview = redactSecrets(clean.promptPreview);
+  if (clean.assistantResponse) clean.assistantResponse = redactSecrets(clean.assistantResponse);
   return clean;
 }
 
@@ -408,6 +409,22 @@ function appendEventRecord(cfg, event) {
   const key = eventDedupeKey(event);
   if (key && loadEvents(file).some(existing => eventDedupeKey(existing) === key)) return false;
   appendLine(file, JSON.stringify(event));
+  return true;
+}
+
+function upsertEventRecord(cfg, event) {
+  if (!event.sourceId) return appendEventRecord(cfg, event);
+  const file = eventFile(cfg, utcDateKey(new Date(event.tsUtc || event.ts)));
+  const clean = sanitizeEvent(event);
+  const events = loadEvents(file);
+  const index = events.findIndex(existing => existing.sourceId === clean.sourceId);
+  if (index < 0) {
+    appendLine(file, JSON.stringify(clean));
+    return true;
+  }
+  if (JSON.stringify(events[index]) === JSON.stringify(clean)) return false;
+  events[index] = clean;
+  fs.writeFileSync(file, events.map(item => JSON.stringify(item)).join('\n') + '\n');
   return true;
 }
 
@@ -728,16 +745,30 @@ function loadEvents(file) {
 }
 
 function mergeEvents(...groups) {
+  const sourceIndexes = new Map();
   const seen = new Set();
   const merged = [];
   for (const event of groups.flat()) {
     const clean = sanitizeEvent(event);
+    if (clean.sourceId) {
+      if (sourceIndexes.has(clean.sourceId)) merged[sourceIndexes.get(clean.sourceId)] = clean;
+      else {
+        sourceIndexes.set(clean.sourceId, merged.length);
+        merged.push(clean);
+      }
+      continue;
+    }
     const key = eventDedupeKey(clean);
     if (key && seen.has(key)) continue;
     if (key) seen.add(key);
     merged.push(clean);
   }
-  return merged.sort((a, b) => String(a.tsUtc || a.ts).localeCompare(String(b.tsUtc || b.ts)));
+  const canonicalSessions = new Set(merged
+    .filter(event => event.event === 'AISessionTurn' && event.sessionId)
+    .map(event => event.sessionId));
+  return merged
+    .filter(event => !(event.event === 'UserPromptSubmit' && canonicalSessions.has(event.sessionId)))
+    .sort((a, b) => String(a.tsUtc || a.ts).localeCompare(String(b.tsUtc || b.ts)));
 }
 
 function loadEventsForLocalDate(cfg, date) {
@@ -1468,6 +1499,7 @@ module.exports = {
   buildReportPrompt,
   config,
   generateReport,
+  mergeEvents,
   processReportJobs,
   requestApi,
   readReportJob,
@@ -1476,6 +1508,7 @@ module.exports = {
   runFullReport,
   setConfigPath,
   tryScheduleReportJobs,
+  upsertEventRecord,
   validateReport,
 };
 
