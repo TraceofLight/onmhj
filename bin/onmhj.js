@@ -2,7 +2,9 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const childProcess = require('child_process');
+const { SessionParserError, parseClaudeRecord, parseCodexRecord } = require('./session-parsers');
 
 let CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
@@ -18,6 +20,7 @@ function usage() {
     '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--report-lang=en|ko] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
+    '  onmhj sessions',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
     '  onmhj ejmhj [YYYY-MM-DD] [--no-push]',
     '  onmhj worker',
@@ -193,6 +196,7 @@ function sanitizeEvent(event) {
   if (clean.prompt) clean.prompt = redactSecrets(clean.prompt);
   if (clean.promptPreview) clean.promptPreview = redactSecrets(clean.promptPreview);
   if (clean.assistantResponse) clean.assistantResponse = redactSecrets(clean.assistantResponse);
+  if (clean.assistantResponsePreview) clean.assistantResponsePreview = redactSecrets(clean.assistantResponsePreview);
   return clean;
 }
 
@@ -227,6 +231,7 @@ function hook(event) {
       ...parsePrompt(input, cfg.promptMode),
     };
     appendLine(eventFile(cfg, utcDateKey(now)), JSON.stringify(record));
+    if (input.transcript_path) rememberSessionSource(cfg, input.transcript_path);
     writeInternalLog(cfg, 'hook_success', {
       event,
       cwd,
@@ -426,6 +431,205 @@ function upsertEventRecord(cfg, event) {
   events[index] = clean;
   fs.writeFileSync(file, events.map(item => JSON.stringify(item)).join('\n') + '\n');
   return true;
+}
+
+function sessionIngestDir(cfg) {
+  return path.join(cfg.stateDir, 'session-ingest');
+}
+
+function cursorFile(cfg) {
+  return path.join(sessionIngestDir(cfg), 'cursors.json');
+}
+
+function quarantineFile(cfg, file) {
+  const id = crypto.createHash('sha256').update(path.resolve(file)).digest('hex').slice(0, 16);
+  return path.join(sessionIngestDir(cfg), 'quarantine', id + '.json');
+}
+
+function copyJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function affectedDate(cfg, state, file) {
+  const ts = state.turn && state.turn.tsUtc;
+  if (ts && !Number.isNaN(new Date(ts).getTime())) return localDateKey(new Date(ts), cfg.timeZone);
+  const match = String(file).match(/[\\/](\d{4})[\\/](\d{2})[\\/](\d{2})[\\/]/);
+  if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  return localDateKey(fs.statSync(file).mtime, cfg.timeZone);
+}
+
+function schemaSignature(record) {
+  if (!record) return 'invalid-json';
+  return [record.type, record.payload && record.payload.type, record.message && record.message.role]
+    .filter(Boolean)
+    .join(':') || 'unknown';
+}
+
+function normalizedSessionEvent(cfg, turn) {
+  const ts = new Date(turn.tsUtc);
+  if (Number.isNaN(ts.getTime())) throw new SessionParserError('session_invalid_timestamp');
+  const event = {
+    schemaVersion: 1,
+    event: 'AISessionTurn',
+    source: `${turn.provider}-transcript`,
+    sourceId: `${turn.provider}:${turn.sessionId}:${turn.turnId}`,
+    provider: turn.provider,
+    sessionId: turn.sessionId,
+    turnId: turn.turnId,
+    tsUtc: ts.toISOString(),
+    localDate: localDateKey(ts, cfg.timeZone),
+    timeZone: cfg.timeZone,
+    deviceId: cfg.deviceId,
+    cwd: turn.cwd,
+    status: turn.status,
+  };
+  if (cfg.promptMode === 'full') {
+    event.prompt = turn.prompt;
+    if (turn.assistantResponse) event.assistantResponse = turn.assistantResponse;
+  } else if (cfg.promptMode !== 'off') {
+    event.promptPreview = String(turn.prompt || '').slice(0, 300);
+    if (turn.assistantResponse) event.assistantResponsePreview = turn.assistantResponse.slice(0, 300);
+  }
+  return event;
+}
+
+async function readJsonLines(file, start, onLine) {
+  const stream = fs.createReadStream(file, { start });
+  let pending = Buffer.alloc(0);
+  let offset = start;
+  for await (const chunk of stream) {
+    pending = Buffer.concat([pending, chunk]);
+    let newline;
+    while ((newline = pending.indexOf(0x0a)) >= 0) {
+      let line = pending.subarray(0, newline);
+      if (line.at(-1) === 0x0d) line = line.subarray(0, -1);
+      const lineStart = offset;
+      offset += newline + 1;
+      pending = pending.subarray(newline + 1);
+      if (!await onLine(line.toString('utf8'), lineStart, offset)) return lineStart;
+    }
+  }
+  return offset;
+}
+
+function parserFor(provider) {
+  if (provider === 'codex') return parseCodexRecord;
+  if (provider === 'claude') return parseClaudeRecord;
+  throw new SessionParserError('unsupported_session_provider');
+}
+
+async function ingestSessionFile(cfg, source, cursors) {
+  const file = path.resolve(source.path);
+  const stored = cursors.files[file] || {};
+  let state = copyJson(stored.state || {});
+  let changed = 0;
+  let failure;
+  const parseRecord = parserFor(source.provider);
+  const offset = await readJsonLines(file, stored.offset || 0, async (line, lineStart) => {
+    const before = copyJson(state);
+    let record;
+    try {
+      record = JSON.parse(line);
+      const parsed = parseRecord(record, state);
+      state = parsed.state;
+      for (const turn of parsed.events) {
+        if (upsertEventRecord(cfg, normalizedSessionEvent(cfg, turn))) changed += 1;
+      }
+      return true;
+    } catch (err) {
+      state = before;
+      failure = {
+        provider: source.provider,
+        pathHash: crypto.createHash('sha256').update(file).digest('hex'),
+        offset: lineStart,
+        affectedDate: affectedDate(cfg, state, file),
+        parserVersion: 1,
+        schemaSignature: schemaSignature(record),
+        code: err.code || (err instanceof SyntaxError ? 'invalid_json' : 'session_ingest_error'),
+      };
+      return false;
+    }
+  });
+
+  if (state.turn && state.turn.prompt) {
+    const pending = { ...state.turn, provider: source.provider, status: 'pending' };
+    if (upsertEventRecord(cfg, normalizedSessionEvent(cfg, pending))) changed += 1;
+  }
+  cursors.files[file] = { provider: source.provider, offset, parserVersion: 1, state };
+  const quarantine = quarantineFile(cfg, file);
+  if (failure) writeJson(quarantine, failure);
+  else if (fs.existsSync(quarantine)) fs.unlinkSync(quarantine);
+  return { changed, failures: failure ? 1 : 0 };
+}
+
+async function ingestSessionFiles(cfg, sources) {
+  const cursors = readJson(cursorFile(cfg), { version: 1, files: {} });
+  let changed = 0;
+  let failures = 0;
+  for (const source of sources) {
+    const result = await ingestSessionFile(cfg, source, cursors);
+    changed += result.changed;
+    failures += result.failures;
+  }
+  writeJson(cursorFile(cfg), cursors);
+  return { changed, failures };
+}
+
+function hasSessionFailure(cfg, date) {
+  const dir = path.join(sessionIngestDir(cfg), 'quarantine');
+  if (!fs.existsSync(dir)) return false;
+  return fs.readdirSync(dir).some(name => readJson(path.join(dir, name), {}).affectedDate === date);
+}
+
+function sessionSourcesFile(cfg) {
+  return path.join(sessionIngestDir(cfg), 'sources.json');
+}
+
+function sessionProvider(file) {
+  return String(file).toLowerCase().includes(`${path.sep}.claude${path.sep}`) ? 'claude' : 'codex';
+}
+
+function rememberSessionSource(cfg, file, provider = sessionProvider(file)) {
+  const sources = readJson(sessionSourcesFile(cfg), []);
+  const resolved = path.resolve(file);
+  if (!sources.some(source => source.path === resolved)) {
+    sources.push({ provider, path: resolved });
+    writeJson(sessionSourcesFile(cfg), sources);
+  }
+}
+
+function findJsonlFiles(root, provider, files = []) {
+  if (!fs.existsSync(root)) return files;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.name === 'subagents') continue;
+    const target = path.join(root, entry.name);
+    if (entry.isDirectory()) findJsonlFiles(target, provider, files);
+    else if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push({ provider, path: target });
+  }
+  return files;
+}
+
+function discoverSessionSources() {
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  return [
+    ...findJsonlFiles(path.join(codexHome, 'sessions'), 'codex'),
+    ...findJsonlFiles(path.join(os.homedir(), '.claude', 'projects'), 'claude'),
+  ];
+}
+
+async function ingestKnownSessions(cfg, discover = false) {
+  const known = readJson(sessionSourcesFile(cfg), []);
+  const sources = discover ? [...known, ...discoverSessionSources()] : known;
+  const unique = [...new Map(sources.map(source => [path.resolve(source.path), source])).values()]
+    .filter(source => fs.existsSync(source.path));
+  for (const source of unique) rememberSessionSource(cfg, source.path, source.provider);
+  return ingestSessionFiles(cfg, unique);
+}
+
+async function sessions() {
+  const result = await ingestKnownSessions(config(), true);
+  process.stdout.write(`sessions changed=${result.changed} failures=${result.failures}\n`);
+  return result;
 }
 
 function normalizeImportedEvent(raw, cfg) {
@@ -1136,6 +1340,9 @@ function flush(date, opts) {
 async function runFullReportUnlocked(cfg, date, opts = {}) {
   if (!cfg.repoPath) throw new Error('run `onmhj register <git-repo-path>` first');
   if (!isGitRepo(cfg.repoPath)) throw new Error(`registered path is not a git repo: ${cfg.repoPath}`);
+  const ingest = opts.ingestSessions || ingestKnownSessions;
+  await ingest(cfg);
+  if (hasSessionFailure(cfg, date)) throw new Error(`unresolved transcript parse failure for ${date}`);
   assertCleanIndex(cfg.repoPath);
   const prepared = prepareDaily(cfg, date);
   if (!prepared) throw new Error(`no events for ${date}`);
@@ -1483,6 +1690,7 @@ async function main() {
   if (cmd === 'config') return configure(opts);
   if (cmd === 'inject') return inject(opts);
   if (cmd === 'import') return importEvents(first);
+  if (cmd === 'sessions') return sessions();
   if (cmd === 'flush') return flush(first && !first.startsWith('--') ? first : undefined, opts);
   if (cmd === 'ejmhj') return runEjmhj(config(), first && !first.startsWith('--') ? first : undefined, opts);
   if (cmd === 'worker') return worker();
@@ -1499,6 +1707,9 @@ module.exports = {
   buildReportPrompt,
   config,
   generateReport,
+  hasSessionFailure,
+  ingestKnownSessions,
+  ingestSessionFiles,
   mergeEvents,
   processReportJobs,
   requestApi,

@@ -11,7 +11,7 @@ function tempDir() {
 }
 
 function cfg(stateDir) {
-  return { stateDir, timeZone: 'UTC', deviceId: 'test-device' };
+  return { stateDir, timeZone: 'UTC', deviceId: 'test-device', promptMode: 'full' };
 }
 
 function readEvents(stateDir, date = '2026-07-13') {
@@ -104,4 +104,65 @@ test('assistant responses are redacted during merge', () => {
 
   assert.equal(event.assistantResponse.includes('super-secret-value'), false);
   assert.match(event.assistantResponse, /\[REDACTED\]/);
+});
+
+test('session ingestion advances its cursor once and does not duplicate events', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'codex.jsonl');
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'codex-transcript.jsonl'), transcript);
+
+  const first = await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
+  const second = await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
+
+  assert.deepEqual(first, { changed: 1, failures: 0 });
+  assert.deepEqual(second, { changed: 0, failures: 0 });
+  assert.equal(readEvents(stateDir).length, 1);
+  const cursors = JSON.parse(fs.readFileSync(path.join(stateDir, 'session-ingest', 'cursors.json'), 'utf8'));
+  assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
+});
+
+test('pending turn is replaced after transcript completion is appended', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'codex.jsonl');
+  const lines = fs.readFileSync(path.join(__dirname, 'fixtures', 'codex-transcript.jsonl'), 'utf8').trim().split('\n');
+  fs.writeFileSync(transcript, lines.slice(0, 4).join('\n') + '\n');
+
+  await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
+  assert.equal(readEvents(stateDir)[0].status, 'pending');
+
+  fs.appendFileSync(transcript, lines.slice(4).join('\n') + '\n');
+  await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
+  const events = readEvents(stateDir);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].status, 'complete');
+  assert.equal(events[0].assistantResponse, 'completed answer');
+});
+
+test('parse failure stops the cursor, stores metadata only, and clears after retry', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'codex.jsonl');
+  const lines = fs.readFileSync(path.join(__dirname, 'fixtures', 'codex-transcript.jsonl'), 'utf8').trim().split('\n');
+  const prefix = lines.slice(0, 4).join('\n') + '\n';
+  const rawSecret = 'token=must-not-enter-quarantine';
+  fs.writeFileSync(transcript, prefix + `{broken:${rawSecret}}\n`);
+
+  const failed = await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
+  const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
+  const failedCursor = JSON.parse(fs.readFileSync(cursorFile, 'utf8'));
+  const quarantineDir = path.join(stateDir, 'session-ingest', 'quarantine');
+  const quarantineFile = path.join(quarantineDir, fs.readdirSync(quarantineDir)[0]);
+  const quarantine = fs.readFileSync(quarantineFile, 'utf8');
+
+  assert.deepEqual(failed, { changed: 1, failures: 1 });
+  assert.equal(failedCursor.files[path.resolve(transcript)].offset, Buffer.byteLength(prefix));
+  assert.equal(quarantine.includes(rawSecret), false);
+  assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), true);
+
+  fs.writeFileSync(transcript, prefix + lines.slice(4).join('\n') + '\n');
+  const retried = await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
+
+  assert.deepEqual(retried, { changed: 1, failures: 0 });
+  assert.equal(fs.readdirSync(quarantineDir).length, 0);
+  assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), false);
+  assert.equal(readEvents(stateDir)[0].status, 'complete');
 });

@@ -448,6 +448,35 @@ test('report generation failure does not write confirmation', async () => {
   assert.equal(fs.existsSync(path.join(cfg.stateDir, 'jobs', 'reports', 'confirmed.json')), false);
 });
 
+test('unresolved transcript failure blocks report generation and confirmation', async () => {
+  const cfg = createRuntime();
+  const quarantineDir = path.join(cfg.stateDir, 'session-ingest', 'quarantine');
+  fs.mkdirSync(quarantineDir, { recursive: true });
+  fs.writeFileSync(path.join(quarantineDir, 'failed.json'), JSON.stringify({
+    provider: 'codex',
+    pathHash: 'safe-hash',
+    offset: 42,
+    affectedDate: date,
+    parserVersion: 1,
+    schemaSignature: 'event_msg:user_message',
+    code: 'codex_invalid_user_message',
+  }));
+  let generated = false;
+
+  await assert.rejects(
+    () => onmhj.runFullReport(cfg, date, {
+      generateReport: async () => {
+        generated = true;
+        return validReport();
+      },
+    }),
+    /unresolved transcript parse failure/,
+  );
+
+  assert.equal(generated, false);
+  assert.equal(fs.existsSync(path.join(cfg.stateDir, 'jobs', 'reports', 'confirmed.json')), false);
+});
+
 test('no-push report generation does not confirm the work date', async () => {
   const cfg = createRuntime();
 
