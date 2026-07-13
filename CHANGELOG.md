@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.14 - 2026-07-13
+## Unreleased
 
 - Added deterministic Codex, Claude, and OpenAI-compatible session-turn normalization with final assistant evidence.
 - Added incremental transcript cursors, metadata-only quarantine, retry, and affected-date confirmation blocking.
