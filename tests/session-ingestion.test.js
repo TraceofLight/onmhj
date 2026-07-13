@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -165,4 +166,30 @@ test('parse failure stops the cursor, stores metadata only, and clears after ret
   assert.equal(fs.readdirSync(quarantineDir).length, 0);
   assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), false);
   assert.equal(readEvents(stateDir)[0].status, 'complete');
+});
+
+test('import normalizes GLM, DeepSeek, and vLLM captures without reasoning or arguments', () => {
+  const stateDir = tempDir();
+  const configFile = path.join(stateDir, 'config.json');
+  fs.writeFileSync(configFile, JSON.stringify({
+    stateDir,
+    promptMode: 'full',
+    timeZone: 'UTC',
+    deviceId: 'test-device',
+  }));
+
+  childProcess.execFileSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'onmhj.js'),
+    'import',
+    path.join(__dirname, 'fixtures', 'openai-captures.jsonl'),
+  ], { env: { ...process.env, ONMHJ_CONFIG: configFile } });
+
+  const serialized = JSON.stringify(readEvents(stateDir));
+  const events = readEvents(stateDir);
+  assert.equal(events.length, 3);
+  assert.deepEqual(events.map(event => event.provider), ['glm', 'deepseek', 'vllm']);
+  assert.deepEqual(events[0].toolNames, ['inspect']);
+  assert.equal(events[2].assistantResponse, 'vllm answer');
+  assert.equal(serialized.includes('private'), false);
+  assert.equal(serialized.includes('arguments'), false);
 });

@@ -4,7 +4,12 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const childProcess = require('child_process');
-const { SessionParserError, parseClaudeRecord, parseCodexRecord } = require('./session-parsers');
+const {
+  SessionParserError,
+  normalizeOpenAIExchange,
+  parseClaudeRecord,
+  parseCodexRecord,
+} = require('./session-parsers');
 
 let CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
@@ -471,7 +476,7 @@ function normalizedSessionEvent(cfg, turn) {
   const event = {
     schemaVersion: 1,
     event: 'AISessionTurn',
-    source: `${turn.provider}-transcript`,
+    source: turn.source || `${turn.provider}-transcript`,
     sourceId: `${turn.provider}:${turn.sessionId}:${turn.turnId}`,
     provider: turn.provider,
     sessionId: turn.sessionId,
@@ -483,6 +488,8 @@ function normalizedSessionEvent(cfg, turn) {
     cwd: turn.cwd,
     status: turn.status,
   };
+  if (turn.model) event.model = turn.model;
+  if (turn.toolNames && turn.toolNames.length) event.toolNames = turn.toolNames;
   if (cfg.promptMode === 'full') {
     event.prompt = turn.prompt;
     if (turn.assistantResponse) event.assistantResponse = turn.assistantResponse;
@@ -686,7 +693,11 @@ function importEvents(file) {
   for (const line of lines) {
     const parsed = parseJsonFromString(line);
     if (!parsed.ok) throw new Error(`invalid JSONL line: ${parsed.error}`);
-    if (appendEventRecord(cfg, normalizeImportedEvent(parsed.value, cfg))) added += 1;
+    const raw = parsed.value;
+    const event = raw.request && raw.response
+      ? normalizedSessionEvent(cfg, { ...normalizeOpenAIExchange(raw), source: 'openai-capture' })
+      : normalizeImportedEvent(raw, cfg);
+    if (upsertEventRecord(cfg, event)) added += 1;
     else skipped += 1;
   }
   writeInternalLog(cfg, 'import', { file, added, skipped });
