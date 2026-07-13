@@ -220,6 +220,7 @@ test('generates a validated report with Codex agent auth without a plugin root',
   assert.deepEqual(invocation.args, codexAgentArgs);
   assert.match(invocation.input, /daily evidence/);
   assert.ok(invocation.options.timeout > 0);
+  assert.equal(invocation.options.windowsHide, true);
   assert.equal(fs.existsSync(invocation.options.cwd), false);
 });
 
@@ -283,6 +284,7 @@ test('generates a validated report with Claude agent auth', async () => {
   ]);
   assert.match(invocation.input, /daily evidence/);
   assert.equal(invocation.options.timeout, 10 * 60 * 1000);
+  assert.equal(invocation.options.windowsHide, true);
   assert.notEqual(invocation.options.env, env);
   assert.deepEqual(invocation.options.env, {
     CLAUDE_PLUGIN_ROOT: 'claude-plugin',

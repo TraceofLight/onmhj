@@ -157,6 +157,7 @@ function run(cmd, args, cwd, allowFail = false) {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   });
   if (!allowFail && out.status !== 0) {
     throw new Error((out.stderr || out.stdout || `${cmd} failed`).trim());
@@ -945,6 +946,7 @@ function spawnWorker(cfg) {
     detached: true,
     stdio: ['ignore', out, out],
     env: { ...process.env, ONMHJ_CONFIG: CONFIG_PATH },
+    windowsHide: true,
   });
   child.unref();
   fs.closeSync(out);
@@ -1204,7 +1206,7 @@ async function generateReport(cfg, date, daily, raw, deps = {}) {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-report-agent-'));
     let result;
     try {
-      const options = { cwd, timeout: REPORT_BACKEND_TIMEOUT_MS };
+      const options = { cwd, timeout: REPORT_BACKEND_TIMEOUT_MS, windowsHide: true };
       if (provider === 'claude') options.env = claudeAgentEnvironment(env);
       result = callAgent(command, args, prompt, options);
     } finally {
