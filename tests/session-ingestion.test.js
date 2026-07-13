@@ -282,7 +282,19 @@ test('a successful parser replay replaces stale local turns in its session scope
     },
   }));
 
-  await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'claude', path: transcript }]);
+  const stagedModes = [];
+  const writeFileSync = fs.writeFileSync;
+  fs.writeFileSync = (file, data, options) => {
+    if (String(file).startsWith(eventDir + path.sep) && String(file).includes('.replay-')) {
+      stagedModes.push(options && options.mode);
+    }
+    return writeFileSync(file, data, options);
+  };
+  try {
+    await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'claude', path: transcript }]);
+  } finally {
+    fs.writeFileSync = writeFileSync;
+  }
 
   const events = readEvents(stateDir);
   const cursor = JSON.parse(fs.readFileSync(cursorFile, 'utf8')).files[path.resolve(transcript)];
@@ -291,6 +303,8 @@ test('a successful parser replay replaces stale local turns in its session scope
     'openai:claude-replayed-session:independent-turn',
   ]);
   assert.equal(events.find(event => event.sourceId.startsWith('claude:')).prompt, 'real human task');
+  assert.ok(stagedModes.length > 0);
+  assert.ok(stagedModes.every(mode => mode === 0o600));
   assert.equal(cursor.parserVersion, 5);
   assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
 });
@@ -411,6 +425,39 @@ test('a replay storage failure rolls back the previous canonical scope', async (
   assert.equal(cursor.parserVersion, 4);
 });
 
+test('a parser replay creates a missing private event directory', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'claude.jsonl');
+  fs.writeFileSync(transcript, [{
+    type: 'user',
+    sessionId: 'new-event-directory',
+    uuid: 'new-turn',
+    timestamp: '2026-07-13T02:00:00.000Z',
+    message: { content: 'new task' },
+  }, {
+    type: 'assistant',
+    sessionId: 'new-event-directory',
+    message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'new answer' }] },
+  }].map(JSON.stringify).join('\n') + '\n');
+  const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
+  fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
+  fs.writeFileSync(cursorFile, JSON.stringify({
+    version: 4,
+    files: {
+      [path.resolve(transcript)]: {
+        provider: 'claude',
+        offset: fs.statSync(transcript).size,
+        parserVersion: 4,
+        state: {},
+      },
+    },
+  }));
+
+  await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'claude', path: transcript }]);
+
+  assert.equal(readEvents(stateDir).length, 1);
+});
+
 test('session ingestion recovers an interrupted replay transaction before parsing', async () => {
   const stateDir = tempDir();
   const eventDir = path.join(stateDir, 'events');
@@ -434,6 +481,32 @@ test('session ingestion recovers an interrupted replay transaction before parsin
   assert.equal(fs.existsSync(backup), false);
   assert.equal(fs.existsSync(temporary), false);
   assert.equal(fs.existsSync(path.join(ingestDir, 'replay-journal.json')), false);
+});
+
+test('an active ingestion lock prevents another process from recovering its journal', async () => {
+  const stateDir = tempDir();
+  const eventDir = path.join(stateDir, 'events');
+  const ingestDir = path.join(stateDir, 'session-ingest');
+  fs.mkdirSync(eventDir, { recursive: true });
+  fs.mkdirSync(ingestDir, { recursive: true });
+  const target = path.join(eventDir, '2026-07-13.jsonl');
+  const journal = path.join(ingestDir, 'replay-journal.json');
+  fs.writeFileSync(target, JSON.stringify({ sourceId: 'active-transaction' }) + '\n');
+  fs.writeFileSync(journal, JSON.stringify({
+    files: [{ target, backup: '', temporary: '', existed: false }],
+  }));
+  fs.writeFileSync(path.join(ingestDir, 'ingestion.lock'), JSON.stringify({
+    pid: process.pid,
+    ts: new Date().toISOString(),
+  }));
+
+  await assert.rejects(
+    () => onmhj.ingestSessionFiles(cfg(stateDir), []),
+    /session ingestion already running/,
+  );
+
+  assert.equal(fs.existsSync(target), true);
+  assert.equal(fs.existsSync(journal), true);
 });
 
 test('pending turn is replaced after transcript completion is appended', async () => {

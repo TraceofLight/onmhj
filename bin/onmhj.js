@@ -547,7 +547,8 @@ function applyReplayReplacement(cfg, plan) {
   let journalWritten = false;
   try {
     for (const file of files) {
-      if (file.temporary) fs.writeFileSync(file.temporary, file.raw);
+      fs.mkdirSync(path.dirname(file.target), { recursive: true });
+      if (file.temporary) fs.writeFileSync(file.temporary, file.raw, { mode: 0o600 });
       if (file.backup) fs.copyFileSync(file.target, file.backup);
     }
     fs.mkdirSync(path.dirname(journalFile), { recursive: true });
@@ -579,6 +580,10 @@ function replaceLocalSessionEvents(cfg, provider, sessionIds, events) {
 
 function sessionIngestDir(cfg) {
   return path.join(cfg.stateDir, 'session-ingest');
+}
+
+function sessionIngestLockFile(cfg) {
+  return path.join(sessionIngestDir(cfg), 'ingestion.lock');
 }
 
 function cursorFile(cfg) {
@@ -725,7 +730,7 @@ async function ingestSessionFile(cfg, source, cursors) {
   return { changed, failures: failure ? 1 : 0 };
 }
 
-async function ingestSessionFiles(cfg, sources) {
+async function ingestSessionFilesUnlocked(cfg, sources) {
   recoverSessionReplay(cfg);
   const cursors = readJson(cursorFile(cfg), { version: 1, files: {} });
   cursors.version = SESSION_PARSER_VERSION;
@@ -738,6 +743,16 @@ async function ingestSessionFiles(cfg, sources) {
   }
   writeJson(cursorFile(cfg), cursors);
   return { changed, failures };
+}
+
+async function ingestSessionFiles(cfg, sources) {
+  const lock = sessionIngestLockFile(cfg);
+  if (!acquireLock(lock)) throw new Error('session ingestion already running');
+  try {
+    return await ingestSessionFilesUnlocked(cfg, sources);
+  } finally {
+    releaseLock(lock);
+  }
 }
 
 function hasSessionFailure(cfg, date) {
