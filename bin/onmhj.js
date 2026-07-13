@@ -1061,6 +1061,43 @@ function mergeEvents(...groups) {
     .sort((a, b) => String(a.tsUtc || a.ts).localeCompare(String(b.tsUtc || b.ts)));
 }
 
+function sessionScopeKey(deviceId, provider, sessionId) {
+  return [deviceId, provider, sessionId].join('\0');
+}
+
+function reconciledSessionScopes(cfg) {
+  const cursors = readJson(cursorFile(cfg), { files: {} });
+  const scopes = new Set();
+  for (const cursor of Object.values(cursors.files || {})) {
+    if (cursor.parserVersion !== SESSION_PARSER_VERSION || !cursor.provider) continue;
+    for (const sessionId of cursor.sessionIds || []) {
+      if (sessionId) scopes.add(sessionScopeKey(cfg.deviceId, cursor.provider, sessionId));
+    }
+  }
+  return scopes;
+}
+
+function isReconciledSessionEvent(event, scopes) {
+  return event.event === 'AISessionTurn' && scopes.has(sessionScopeKey(
+    event.deviceId,
+    event.provider,
+    event.sessionId,
+  ));
+}
+
+function rawDatesWithReconciledEvents(cfg, scopes) {
+  if (!scopes.size) return [];
+  const dir = path.join(cfg.repoPath, 'raw', 'ai-sessions');
+  try {
+    return fs.readdirSync(dir)
+      .filter(file => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(file))
+      .filter(file => loadEvents(path.join(dir, file)).some(event => isReconciledSessionEvent(event, scopes)))
+      .map(file => file.slice(0, 10));
+  } catch {
+    return [];
+  }
+}
+
 function loadEventsForLocalDate(cfg, date) {
   const dir = path.join(cfg.stateDir, 'events');
   let files = [];
@@ -1417,11 +1454,23 @@ function publishSessionEvents(cfg, opts = {}) {
   try {
     assertCleanIndex(cfg.repoPath);
     const pulled = syncReportRepo(cfg.repoPath);
+    const scopes = reconciledSessionScopes(cfg);
+    const dates = new Set([
+      ...localEventDates(cfg, '9999-12-31'),
+      ...rawDatesWithReconciledEvents(cfg, scopes),
+    ]);
     const targets = [];
-    for (const date of localEventDates(cfg, '9999-12-31')) {
+    for (const date of [...dates].sort()) {
       const target = path.join(cfg.repoPath, 'raw', 'ai-sessions', date + '.jsonl');
-      const events = mergeEvents(loadEvents(target), loadEventsForLocalDate(cfg, date));
-      if (!events.length) continue;
+      const stored = loadEvents(target).filter(event => !isReconciledSessionEvent(event, scopes));
+      const events = mergeEvents(stored, loadEventsForLocalDate(cfg, date));
+      if (!events.length) {
+        if (fs.existsSync(target)) {
+          fs.unlinkSync(target);
+          targets.push(target);
+        }
+        continue;
+      }
       const raw = events.map(event => JSON.stringify(event)).join('\n') + '\n';
       if (fs.existsSync(target) && fs.readFileSync(target, 'utf8') === raw) continue;
       fs.mkdirSync(path.dirname(target), { recursive: true });

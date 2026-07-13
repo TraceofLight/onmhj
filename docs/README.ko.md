@@ -107,11 +107,11 @@ OpenAI-compatible capture record는 `provider`, `tsUtc`, `cwd`, 전체 `request`
 
 ## Canonical Session
 
-`onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 `AISessionTurn`은 안정적인 `sourceId`를 사용하므로 completed turn이 pending turn을 교체하고, 같은 session의 중복 hook preview는 제외한다. Canonical user prompt와 최종 answer는 redaction 후 전체를 저장한다.
+`onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 canonical `AISessionTurn`에는 실제 사용자 요청과 존재하는 경우 최종 답변만 포함한다. 알려진 tool result, skill injection, notification, command, compaction record는 원본 transcript에만 남긴다. Canonical user prompt와 최종 answer는 redaction 후 전체를 저장한다.
 
-`onmhj config --auto-report=false`를 설정하면 `SessionStart`가 report job을 예약하지 않는다. 이후 `onmhj sessions --publish`는 registered repo를 pull하고 unresolved quarantine이 없는지 확인한 뒤, 모든 local date를 `sourceId` 기준으로 `raw/ai-sessions`에 병합해 커밋과 push를 각각 한 번만 수행한다. `daily/`, `reports/`, report job, confirmation은 변경하지 않는다.
+`onmhj config --auto-report=false`를 설정하면 `SessionStart`가 report job을 예약하지 않는다. 이후 `onmhj sessions --publish`는 registered repo를 pull하고 unresolved quarantine이 없는지 확인한 뒤, 성공적으로 replay한 현재 기기의 session 범위만 `raw/ai-sessions`에서 교체해 커밋과 push를 각각 한 번만 수행한다. 다른 기기, 다른 session, 다른 event type과 `daily/`, `reports/`, report job, confirmation은 변경하지 않는다.
 
-파일 cursor는 `~/.local/state/onmhj/session-ingest/`에 있다. 관련 record 파싱이 실패하면 해당 byte offset에서 멈추고 metadata-only quarantine을 남긴다. 정상 재시도로 quarantine이 해소될 때까지 영향받은 날짜의 최종보고서 확정을 차단한다.
+파일 cursor는 `~/.local/state/onmhj/session-ingest/`에 있다. parser version replay는 transcript 전체 파싱이 성공한 뒤에만 이전 canonical 결과를 교체한다. 관련 record 파싱이 실패하면 해당 byte offset에서 멈추고 metadata-only quarantine을 남기며, 실패한 replay는 기존 canonical 집합과 처음부터 다시 시도할 수 있는 cursor를 유지한다.
 
 git-history 백필은 설정된 owner identity가 author 또는 committer인 커밋만 포함해야 한다.
 

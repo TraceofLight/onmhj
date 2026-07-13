@@ -424,6 +424,131 @@ test('raw session publish merges multiple dates in one commit without report cha
   assert.equal(git(repoPath, ['status', '--short']), 'M daily/2026-07-12.md');
 });
 
+test('raw session publish reconciles current-device sessions without touching unrelated events', () => {
+  const root = tempDir();
+  const stateDir = path.join(root, 'state');
+  const repoPath = path.join(root, 'repo');
+  const runtime = { ...cfg(stateDir), repoPath };
+  initRepo(repoPath);
+
+  const scope = {
+    provider: 'claude',
+    sessionId: 'reconciled-session',
+    deviceId: 'test-device',
+  };
+  const rawDir = path.join(repoPath, 'raw', 'ai-sessions');
+  fs.mkdirSync(rawDir, { recursive: true });
+  fs.writeFileSync(path.join(rawDir, '2026-07-12.jsonl'), JSON.stringify({
+    event: 'AISessionTurn',
+    sourceId: 'claude:reconciled-session:stale-only-turn',
+    turnId: 'stale-only-turn',
+    tsUtc: '2026-07-12T01:00:00.000Z',
+    localDate: '2026-07-12',
+    prompt: '<task-notification>stale</task-notification>',
+    ...scope,
+  }) + '\n');
+
+  const stored = [{
+    event: 'AISessionTurn',
+    sourceId: 'claude:reconciled-session:synthetic-turn',
+    turnId: 'synthetic-turn',
+    tsUtc: '2026-07-13T00:00:00.000Z',
+    localDate: '2026-07-13',
+    prompt: 'Base directory for this skill: C:\\skill',
+    ...scope,
+  }, {
+    event: 'AISessionTurn',
+    sourceId: 'claude:reconciled-session:old-real-turn',
+    turnId: 'old-real-turn',
+    tsUtc: '2026-07-13T00:01:00.000Z',
+    localDate: '2026-07-13',
+    prompt: 'old replay output',
+    ...scope,
+  }, {
+    event: 'AISessionTurn',
+    sourceId: 'claude:other-session:keep-current-device',
+    provider: 'claude',
+    sessionId: 'other-session',
+    turnId: 'keep-current-device',
+    deviceId: 'test-device',
+    tsUtc: '2026-07-13T00:02:00.000Z',
+    localDate: '2026-07-13',
+    prompt: 'other local session',
+  }, {
+    event: 'AISessionTurn',
+    sourceId: 'claude:reconciled-session:keep-other-device',
+    provider: 'claude',
+    sessionId: 'reconciled-session',
+    turnId: 'keep-other-device',
+    deviceId: 'other-device',
+    tsUtc: '2026-07-13T00:03:00.000Z',
+    localDate: '2026-07-13',
+    prompt: 'other device session',
+  }, {
+    event: 'ManualImport',
+    sourceId: 'manual:keep',
+    deviceId: 'test-device',
+    tsUtc: '2026-07-13T00:04:00.000Z',
+    localDate: '2026-07-13',
+    prompt: 'manual evidence',
+  }, {
+    event: 'GitCommit',
+    sourceId: 'git:keep',
+    deviceId: 'test-device',
+    tsUtc: '2026-07-13T00:05:00.000Z',
+    localDate: '2026-07-13',
+  }];
+  fs.writeFileSync(
+    path.join(rawDir, '2026-07-13.jsonl'),
+    stored.map(event => JSON.stringify(event)).join('\n') + '\n',
+  );
+  git(repoPath, ['add', '.']);
+  git(repoPath, ['commit', '-m', 'test: seed reconciled raw sessions']);
+
+  const localDir = path.join(stateDir, 'events');
+  fs.mkdirSync(localDir, { recursive: true });
+  fs.writeFileSync(path.join(localDir, '2026-07-13.jsonl'), JSON.stringify({
+    event: 'AISessionTurn',
+    source: 'claude-transcript',
+    sourceId: 'claude:reconciled-session:new-real-turn',
+    turnId: 'new-real-turn',
+    tsUtc: '2026-07-13T01:00:00.000Z',
+    localDate: '2026-07-13',
+    prompt: 'new canonical task',
+    status: 'pending',
+    ...scope,
+  }) + '\n');
+
+  const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
+  fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
+  fs.writeFileSync(cursorFile, JSON.stringify({
+    version: 5,
+    files: {
+      'claude-transcript.jsonl': {
+        provider: 'claude',
+        parserVersion: 5,
+        sessionIds: ['reconciled-session'],
+      },
+    },
+  }));
+
+  const result = onmhj.publishSessionEvents(runtime, { noPush: true });
+
+  const published = fs.readFileSync(path.join(rawDir, '2026-07-13.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map(JSON.parse);
+  assert.deepEqual(result, { changed: true, dates: 2 });
+  assert.equal(fs.existsSync(path.join(rawDir, '2026-07-12.jsonl')), false);
+  assert.deepEqual(published.map(event => event.sourceId).sort(), [
+    'claude:other-session:keep-current-device',
+    'claude:reconciled-session:keep-other-device',
+    'claude:reconciled-session:new-real-turn',
+    'git:keep',
+    'manual:keep',
+  ]);
+});
+
 test('raw session publish stops before touching the repo when quarantine exists', () => {
   const root = tempDir();
   const stateDir = path.join(root, 'state');

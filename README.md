@@ -107,11 +107,11 @@ An OpenAI-compatible capture record contains `provider`, `tsUtc`, `cwd`, and the
 
 ## Canonical Sessions
 
-`onmhj sessions` reads Codex and Claude transcripts incrementally. Each canonical `AISessionTurn` has a stable `sourceId`, so a completed turn replaces its pending form and duplicate hook previews for that session are excluded. Canonical user prompts and final answers are stored completely after redaction.
+`onmhj sessions` reads Codex and Claude transcripts incrementally. Each canonical `AISessionTurn` contains a real user request and its final answer when available; known tool results, skill injections, notifications, commands, and compaction records remain only in the original transcript. Canonical user prompts and final answers are stored completely after redaction.
 
-Set `onmhj config --auto-report=false` to stop `SessionStart` from scheduling report jobs. `onmhj sessions --publish` then pulls the registered repo, blocks on any unresolved quarantine entry, merges every local date into `raw/ai-sessions` by `sourceId`, and creates one commit and push without changing `daily/`, `reports/`, report jobs, or confirmations.
+Set `onmhj config --auto-report=false` to stop `SessionStart` from scheduling report jobs. `onmhj sessions --publish` then pulls the registered repo, blocks on any unresolved quarantine entry, replaces successfully replayed current-device session scopes in `raw/ai-sessions`, and creates one commit and push without changing `daily/`, `reports/`, report jobs, or confirmations. Other devices, sessions, and event types are preserved.
 
-File cursors live under `~/.local/state/onmhj/session-ingest/`. A malformed relevant record stops at its byte offset and creates a metadata-only quarantine entry. Final report generation for the affected date remains blocked until a successful retry clears it.
+File cursors live under `~/.local/state/onmhj/session-ingest/`. A parser-version replay replaces prior canonical output only after that transcript parses successfully. A malformed relevant record stops at its byte offset and creates a metadata-only quarantine entry; an unsuccessful replay keeps the previous canonical set and remains replayable from the start.
 
 Git-history backfills must include only commits authored or committed by the configured owner identity.
 
