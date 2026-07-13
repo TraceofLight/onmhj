@@ -166,6 +166,104 @@ test('Claude parser ignores tool-result users and emits one human turn', () => {
   }]);
 });
 
+test('Claude parser preserves a human turn across known internal user records', () => {
+  const internalRecords = [{
+    type: 'user',
+    isMeta: true,
+    sourceToolUseID: 'tool-1',
+    sessionId: 'claude-session',
+    uuid: 'skill-injection',
+    message: { content: [{ type: 'text', text: 'Base directory for this skill: C:\\skill' }] },
+  }, {
+    type: 'user',
+    sessionId: 'claude-session',
+    uuid: 'legacy-skill-injection',
+    message: { content: 'Base directory for this skill: C:\\legacy-skill' },
+  }, {
+    type: 'user',
+    sessionId: 'claude-session',
+    uuid: 'task-notification',
+    message: { content: '<task-notification>background task completed</task-notification>' },
+  }, {
+    type: 'user',
+    sessionId: 'claude-session',
+    uuid: 'compaction',
+    message: { content: 'This session is being continued from a previous conversation that ran out of context. Summary follows.' },
+  }, {
+    type: 'user',
+    sessionId: 'claude-session',
+    uuid: 'malformed-tool',
+    message: { content: 'Your tool call was malformed and could not be parsed. Retry it.' },
+  }, {
+    type: 'user',
+    sessionId: 'claude-session',
+    uuid: 'interrupted',
+    message: { content: '[Request interrupted by user]' },
+  }];
+
+  for (const internal of internalRecords) {
+    const { events } = parse([{
+      type: 'user',
+      sessionId: 'claude-session',
+      uuid: 'human-turn',
+      timestamp: '2026-07-13T02:00:00.000Z',
+      cwd: 'D:\\work\\repo',
+      message: { content: 'actual human task' },
+    }, internal, {
+      type: 'assistant',
+      message: {
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'actual final answer' }],
+      },
+    }], parseClaudeRecord);
+
+    assert.equal(events.length, 1, internal.uuid);
+    assert.equal(events[0].prompt, 'actual human task', internal.uuid);
+    assert.equal(events[0].assistantResponse, 'actual final answer', internal.uuid);
+  }
+});
+
+test('Claude command envelopes clear an unfinished human turn', () => {
+  for (const content of [
+    '<command-name>/model</command-name><command-message>model</command-message>',
+    '<local-command-stdout>changed model</local-command-stdout>',
+  ]) {
+    const { events, state } = parse([{
+      type: 'user',
+      sessionId: 'claude-session',
+      uuid: 'unfinished-human-turn',
+      timestamp: '2026-07-13T02:00:00.000Z',
+      message: { content: 'unfinished human task' },
+    }, {
+      type: 'user',
+      sessionId: 'claude-session',
+      uuid: 'command-envelope',
+      message: { content },
+    }, {
+      type: 'assistant',
+      message: {
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'command response' }],
+      },
+    }], parseClaudeRecord);
+
+    assert.deepEqual(events, []);
+    assert.equal(state.turn, undefined);
+  }
+});
+
+test('Claude parser rejects an unclassified user content shape', () => {
+  assert.throws(
+    () => parseClaudeRecord({
+      type: 'user',
+      sessionId: 'claude-session',
+      uuid: 'unknown-shape',
+      message: { content: [{ type: 'protocol', value: 'unknown' }] },
+    }),
+    err => err.code === 'claude_unclassified_user_message',
+  );
+});
+
 test('relevant malformed shapes fail without content in the error', () => {
   const secret = 'private prompt body';
   assert.throws(

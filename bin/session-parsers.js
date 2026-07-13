@@ -126,18 +126,40 @@ function humanClaudePrompt(content) {
   return undefined;
 }
 
+const CLAUDE_INTERNAL_PROMPT_PREFIXES = [
+  '<task-notification>',
+  'Base directory for this skill:',
+  'This session is being continued from a previous conversation that ran out of context.',
+  'Your tool call was malformed and could not be parsed.',
+];
+
+function claudeUserKind(record, prompt) {
+  if (prompt === null || record.isMeta === true || record.sourceToolUseID) return 'internal';
+  if (typeof prompt !== 'string') parserError('claude_unclassified_user_message');
+  const text = prompt.trimStart();
+  if (text.startsWith('<command-name>') || text.startsWith('<local-command')) return 'boundary';
+  if (text === '[Request interrupted by user]') return 'internal';
+  if (CLAUDE_INTERNAL_PROMPT_PREFIXES.some(prefix => text.startsWith(prefix))) return 'internal';
+  return 'human';
+}
+
 function parseClaudeRecord(record, previous = {}) {
   const state = { ...previous };
   if (!record || typeof record !== 'object') return { state, events: [] };
+  if (typeof record.sessionId === 'string') state.sessionId = record.sessionId;
 
   if (record.type === 'user') {
     const message = record.message;
     const prompt = humanClaudePrompt(message && message.content);
-    if (prompt === null) return { state, events: [] };
-    if (typeof prompt !== 'string') parserError('claude_invalid_user_message');
+    const kind = claudeUserKind(record, prompt);
+    if (kind === 'internal') return { state, events: [] };
+    if (kind === 'boundary') {
+      delete state.turn;
+      return { state, events: [] };
+    }
     if (typeof record.uuid !== 'string') parserError('claude_missing_user_uuid');
     state.turn = {
-      sessionId: String(record.sessionId || ''),
+      sessionId: state.sessionId || '',
       turnId: record.uuid,
       tsUtc: String(record.timestamp || ''),
       cwd: String(record.cwd || ''),
