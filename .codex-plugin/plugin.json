@@ -1,6 +1,6 @@
 {
   "name": "onmhj",
-  "version": "0.1.13+codex.20260713122943",
+  "version": "0.1.13+codex.20260713131816",
   "description": "Local AI-session capture with automatic final reports and ordered retries.",
   "author": {
     "name": "onmhj maintainers"
