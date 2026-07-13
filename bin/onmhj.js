@@ -23,11 +23,11 @@ const SESSION_PARSER_VERSION = 5;
 const RAW_SESSION_COMMIT_MESSAGE = `data(sessions): publish raw AI sessions
 
 작업 의도:
-- 다중 장치 세션 원문의 additive 병합
-- 보고서 생성 전 raw evidence 보존
+- 현재 기기 canonical session 범위 교체
+- 다른 기기 및 비-transcript evidence 보존
 
 작업 세부 사항:
-- sourceId 기반 중복 제거 및 최신 상태 반영
+- parser v5 cursor 범위의 authoritative raw reconciliation
 - daily, reports 및 confirmation 변경 제외`;
 
 function usage() {

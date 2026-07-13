@@ -682,7 +682,10 @@ test('raw session publish merges multiple dates in one commit without report cha
     'raw/ai-sessions/2026-07-13.jsonl',
   ]);
   assert.equal(git(repoPath, ['log', '--format=%s', '-1']), 'data(sessions): publish raw AI sessions');
-  assert.match(git(repoPath, ['log', '--format=%B', '-1']), /작업 의도:/);
+  const commitBody = git(repoPath, ['log', '--format=%B', '-1']);
+  assert.match(commitBody, /작업 의도:/);
+  assert.match(commitBody, /현재 기기 canonical session 범위 교체/);
+  assert.match(commitBody, /다른 기기.*보존/);
   assert.equal(fs.readFileSync(sentinels.daily, 'utf8'), before.daily);
   assert.equal(fs.readFileSync(sentinels.report, 'utf8'), before.report);
   assert.equal(fs.readFileSync(sentinels.remoteConfirmation, 'utf8'), before.remoteConfirmation);
