@@ -73,13 +73,13 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | Command | Purpose |
 | --- | --- |
 | `onmhj register <repo>` | Set the external report repo. |
-| `onmhj config ...` | Update timezone, device id, owner, language, auth, and API settings. |
+| `onmhj config ...` | Update timezone, device id, owner, automatic-report, language, auth, and API settings. |
 | `onmhj status` | Show config, local event count, confirmed floor, and job counts. |
 | `onmhj flush [date]` | Merge events and publish raw/daily evidence without confirming the date. |
 | `onmhj ejmhj [date]` | Publish raw/daily/final report for yesterday or the specified work date. |
 | `onmhj inject --text=...` | Add one normalized manual event. |
 | `onmhj import <events.jsonl>` | Import normalized events or OpenAI-compatible request/response captures. |
-| `onmhj sessions` | Incrementally scan known Codex and Claude transcript JSONL. |
+| `onmhj sessions [--publish]` | Incrementally scan Codex and Claude transcripts; optionally publish all raw dates in one commit. |
 | `onmhj worker` | Process pending report jobs in the background. |
 
 Plugin commands delegate to the same CLI: Codex uses `/onmhj ...` and `/ejmhj [date]`; Claude Code uses `/onmhj:onmhj ...` and `/onmhj:ejmhj [date]`.
@@ -108,6 +108,8 @@ An OpenAI-compatible capture record contains `provider`, `tsUtc`, `cwd`, and the
 ## Canonical Sessions
 
 `onmhj sessions` reads Codex and Claude transcripts incrementally. Each canonical `AISessionTurn` has a stable `sourceId`, so a completed turn replaces its pending form and duplicate hook previews for that session are excluded. `full` stores redacted canonical prompts and answers, `preview` stores their first 300 characters, and `off` stores metadata only.
+
+Set `onmhj config --auto-report=false` to stop `SessionStart` from scheduling report jobs. `onmhj sessions --publish` then pulls the registered repo, blocks on any unresolved quarantine entry, merges every local date into `raw/ai-sessions` by `sourceId`, and creates one commit and push without changing `daily/`, `reports/`, report jobs, or confirmations.
 
 File cursors live under `~/.local/state/onmhj/session-ingest/`. A malformed relevant record stops at its byte offset and creates a metadata-only quarantine entry. Final report generation for the affected date remains blocked until a successful retry clears it.
 
@@ -141,7 +143,7 @@ A date is confirmed only after its final report passes validation and raw, daily
 ## Safety
 
 - Hooks append locally only.
-- Git sync and push run only during `flush` or worker-driven report jobs.
+- Git sync and push run only during `sessions --publish`, `flush`, or worker-driven report jobs.
 - `flush`/worker pulls before writing; direct report-repo edits and custom backfills must do the same manually.
 - Prompt capture defaults to `preview`; use `full` or `off` as needed.
 - Final-report regeneration must preserve every prior non-heading report line; destructive output is rejected before the report or confirmation is written.

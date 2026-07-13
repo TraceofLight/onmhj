@@ -7,6 +7,7 @@
 - Skipped known Codex internal/context-only and empty no-op turns, and replayed stale file cursors after parser upgrades.
 - Prevented final-report regeneration from removing prior report content.
 - Hid Windows worker, report-agent, and git subprocess windows during background report generation.
+- Added an `autoReport` gate and one-commit raw-only multi-date session publishing.
 
 ## 0.1.13 - 2026-07-12
 

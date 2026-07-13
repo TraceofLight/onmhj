@@ -20,6 +20,17 @@ function readEvents(stateDir, date = '2026-07-13') {
   return fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
 }
 
+function git(repo, args) {
+  return childProcess.execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+}
+
+function initRepo(repo) {
+  fs.mkdirSync(repo, { recursive: true });
+  git(repo, ['init']);
+  git(repo, ['config', 'user.name', 'Test User']);
+  git(repo, ['config', 'user.email', 'test@example.com']);
+}
+
 test('completed source event replaces pending local event', () => {
   const stateDir = tempDir();
   const base = {
@@ -219,6 +230,74 @@ test('parse failure stops the cursor, stores metadata only, and clears after ret
   assert.equal(fs.readdirSync(quarantineDir).length, 0);
   assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), false);
   assert.equal(readEvents(stateDir)[0].status, 'complete');
+});
+
+test('raw session publish merges multiple dates in one commit without report changes', () => {
+  const root = tempDir();
+  const stateDir = path.join(root, 'state');
+  const repoPath = path.join(root, 'repo');
+  const runtime = { ...cfg(stateDir), repoPath };
+  initRepo(repoPath);
+
+  const sentinels = {
+    daily: path.join(repoPath, 'daily', '2026-07-12.md'),
+    report: path.join(repoPath, 'reports', '2026-07-12.md'),
+    remoteConfirmation: path.join(repoPath, 'state', 'devices', 'test-device.json'),
+    localConfirmation: path.join(stateDir, 'jobs', 'reports', 'confirmed.json'),
+  };
+  for (const [name, file] of Object.entries(sentinels)) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${name}\n`);
+  }
+  git(repoPath, ['add', '.']);
+  git(repoPath, ['commit', '-m', 'test: seed report artifacts']);
+  fs.appendFileSync(sentinels.daily, 'user edit\n');
+
+  for (const date of ['2026-07-12', '2026-07-13']) {
+    const file = path.join(stateDir, 'events', `${date}.jsonl`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      event: 'AISessionTurn',
+      sourceId: `codex:session:${date}`,
+      tsUtc: `${date}T01:00:00.000Z`,
+      localDate: date,
+      deviceId: 'test-device',
+      prompt: `task ${date}`,
+    }) + '\n');
+  }
+
+  const before = Object.fromEntries(Object.entries(sentinels).map(([name, file]) => [name, fs.readFileSync(file, 'utf8')]));
+  const result = onmhj.publishSessionEvents(runtime, { noPush: true });
+  const committed = git(repoPath, ['show', '--pretty=format:', '--name-only', 'HEAD']).split('\n').filter(Boolean).sort();
+
+  assert.deepEqual(result, { changed: true, dates: 2 });
+  assert.deepEqual(committed, [
+    'raw/ai-sessions/2026-07-12.jsonl',
+    'raw/ai-sessions/2026-07-13.jsonl',
+  ]);
+  assert.equal(git(repoPath, ['log', '--format=%s', '-1']), 'data(sessions): publish raw AI sessions');
+  assert.match(git(repoPath, ['log', '--format=%B', '-1']), /작업 의도:/);
+  assert.equal(fs.readFileSync(sentinels.daily, 'utf8'), before.daily);
+  assert.equal(fs.readFileSync(sentinels.report, 'utf8'), before.report);
+  assert.equal(fs.readFileSync(sentinels.remoteConfirmation, 'utf8'), before.remoteConfirmation);
+  assert.equal(fs.readFileSync(sentinels.localConfirmation, 'utf8'), before.localConfirmation);
+  assert.equal(git(repoPath, ['status', '--short']), 'M daily/2026-07-12.md');
+});
+
+test('raw session publish stops before touching the repo when quarantine exists', () => {
+  const root = tempDir();
+  const stateDir = path.join(root, 'state');
+  const repoPath = path.join(root, 'repo');
+  initRepo(repoPath);
+  const quarantine = path.join(stateDir, 'session-ingest', 'quarantine', 'failure.json');
+  fs.mkdirSync(path.dirname(quarantine), { recursive: true });
+  fs.writeFileSync(quarantine, '{}\n');
+
+  assert.throws(
+    () => onmhj.publishSessionEvents({ ...cfg(stateDir), repoPath }, { noPush: true }),
+    /unresolved transcript parse failure/,
+  );
+  assert.equal(git(repoPath, ['status', '--short']), '');
 });
 
 test('import normalizes GLM, DeepSeek, and vLLM captures without reasoning or arguments', () => {

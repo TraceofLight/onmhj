@@ -17,16 +17,25 @@ const DEFAULT_REPORT_API_KEY_ENV = 'ONMHJ_LLM_API_KEY';
 const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 const REPORT_BACKEND_TIMEOUT_MS = 10 * 60 * 1000;
 const SESSION_PARSER_VERSION = 2;
+const RAW_SESSION_COMMIT_MESSAGE = `data(sessions): publish raw AI sessions
+
+작업 의도:
+- 다중 장치 세션 원문의 additive 병합
+- 보고서 생성 전 raw evidence 보존
+
+작업 세부 사항:
+- sourceId 기반 중복 제거 및 최신 상태 반영
+- daily, reports 및 confirmation 변경 제외`;
 
 function usage() {
   return [
     'Usage:',
     '  onmhj hook <event>',
-    '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--report-lang=en|ko] [--report-auth=agent|api]',
-    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--report-lang=en|ko] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
+    '  onmhj register <git-repo-path> [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api]',
+    '  onmhj config [--prompt=preview|full|off] [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
-    '  onmhj sessions',
+    '  onmhj sessions [--publish] [--no-push]',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
     '  onmhj ejmhj [YYYY-MM-DD] [--no-push]',
     '  onmhj worker',
@@ -58,6 +67,7 @@ function config() {
     deviceId: cfg.deviceId || defaultDeviceId(),
     ownerName: cfg.ownerName || globalGitConfig('user.name') || os.userInfo().username,
     ownerEmail: cfg.ownerEmail || globalGitConfig('user.email') || '',
+    autoReport: cfg.autoReport !== false,
     reportLanguage: cfg.reportLanguage || userLanguage(),
     reportAuth: cfg.reportAuth || 'agent',
     reportApiBaseUrl: cfg.reportApiBaseUrl || '',
@@ -246,7 +256,7 @@ function hook(event) {
       localDate: record.localDate,
       sessionId: record.sessionId,
     });
-    if (event === 'SessionStart') tryScheduleReportJobs(cfg, now);
+    if (event === 'SessionStart' && cfg.autoReport) tryScheduleReportJobs(cfg, now);
   } catch (err) {
     writeInternalLog(cfg, 'hook_error', {
       event,
@@ -277,6 +287,7 @@ function parseOptions(args) {
     if (arg.startsWith('--device-id=')) opts.deviceId = arg.slice('--device-id='.length);
     if (arg.startsWith('--owner-name=')) opts.ownerName = arg.slice('--owner-name='.length);
     if (arg.startsWith('--owner-email=')) opts.ownerEmail = arg.slice('--owner-email='.length);
+    if (arg.startsWith('--auto-report=')) opts.autoReport = arg.slice('--auto-report='.length);
     if (arg.startsWith('--report-lang=')) opts.reportLanguage = arg.slice('--report-lang='.length);
     if (arg.startsWith('--report-auth=')) opts.reportAuth = arg.slice('--report-auth='.length);
     if (arg.startsWith('--report-api-base=')) opts.reportApiBaseUrl = arg.slice('--report-api-base='.length);
@@ -292,6 +303,7 @@ function parseOptions(args) {
     if (arg.startsWith('--ts=')) opts.tsUtc = arg.slice('--ts='.length);
     if (arg.startsWith('--event=')) opts.event = arg.slice('--event='.length);
     if (arg === '--no-push') opts.noPush = true;
+    if (arg === '--publish') opts.publish = true;
   }
   return opts;
 }
@@ -308,6 +320,7 @@ function register(repoPath, opts) {
   if (opts.timeZone) cfg.timeZone = opts.timeZone;
   applyDeviceConfig(cfg, opts);
   applyOwnerConfig(cfg, opts);
+  applyAutoReportConfig(cfg, opts);
   applyReportConfig(cfg, opts);
   writeJson(CONFIG_PATH, cfg);
   writeInternalLog(cfg, 'register', {
@@ -317,6 +330,7 @@ function register(repoPath, opts) {
     deviceId: cfg.deviceId,
     ownerName: cfg.ownerName,
     ownerEmail: cfg.ownerEmail,
+    autoReport: cfg.autoReport,
     reportLanguage: cfg.reportLanguage,
     reportAuth: cfg.reportAuth,
   });
@@ -333,6 +347,9 @@ function validateConfigOptions(opts) {
   }
   if (opts.reportAuth && !['agent', 'api'].includes(opts.reportAuth)) {
     throw new Error('report auth must be agent or api');
+  }
+  if (opts.autoReport !== undefined && !['true', 'false'].includes(opts.autoReport)) {
+    throw new Error('auto report must be true or false');
   }
   if (opts.reportLanguage && !['en', 'ko'].includes(opts.reportLanguage)) {
     throw new Error('report language must be en or ko');
@@ -353,6 +370,10 @@ function applyDeviceConfig(cfg, opts) {
 function applyOwnerConfig(cfg, opts) {
   if (opts.ownerName) cfg.ownerName = opts.ownerName;
   if (opts.ownerEmail) cfg.ownerEmail = opts.ownerEmail;
+}
+
+function applyAutoReportConfig(cfg, opts) {
+  if (opts.autoReport !== undefined) cfg.autoReport = opts.autoReport === 'true';
 }
 
 function applyReportConfig(cfg, opts) {
@@ -381,7 +402,7 @@ function reportRuntime(cfg) {
 
 function configure(opts) {
   validateConfigOptions(opts);
-  if (!opts.promptMode && !opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && !opts.reportLanguage && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
+  if (!opts.promptMode && !opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
     throw new Error(usage());
   }
   const cfg = config();
@@ -389,6 +410,7 @@ function configure(opts) {
   if (opts.timeZone) cfg.timeZone = opts.timeZone;
   applyDeviceConfig(cfg, opts);
   applyOwnerConfig(cfg, opts);
+  applyAutoReportConfig(cfg, opts);
   applyReportConfig(cfg, opts);
   writeJson(CONFIG_PATH, cfg);
   writeInternalLog(cfg, 'config', {
@@ -397,10 +419,11 @@ function configure(opts) {
     deviceId: cfg.deviceId,
     ownerName: cfg.ownerName,
     ownerEmail: cfg.ownerEmail,
+    autoReport: cfg.autoReport,
     reportLanguage: cfg.reportLanguage,
     reportAuth: cfg.reportAuth,
   });
-  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} reportLanguage=${cfg.reportLanguage} reportAuth=${cfg.reportAuth}\n`);
+  process.stdout.write(`configured prompt=${cfg.promptMode} timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} autoReport=${cfg.autoReport} reportLanguage=${cfg.reportLanguage} reportAuth=${cfg.reportAuth}\n`);
 }
 
 function eventDedupeKey(event) {
@@ -592,6 +615,15 @@ function hasSessionFailure(cfg, date) {
   return fs.readdirSync(dir).some(name => readJson(path.join(dir, name), {}).affectedDate === date);
 }
 
+function hasAnySessionFailure(cfg) {
+  const dir = path.join(sessionIngestDir(cfg), 'quarantine');
+  try {
+    return fs.readdirSync(dir).some(name => name.endsWith('.json'));
+  } catch {
+    return false;
+  }
+}
+
 function sessionSourcesFile(cfg) {
   return path.join(sessionIngestDir(cfg), 'sources.json');
 }
@@ -637,9 +669,11 @@ async function ingestKnownSessions(cfg, discover = false) {
   return ingestSessionFiles(cfg, unique);
 }
 
-async function sessions() {
-  const result = await ingestKnownSessions(config(), true);
+async function sessions(opts = {}) {
+  const cfg = config();
+  const result = await ingestKnownSessions(cfg, true);
   process.stdout.write(`sessions changed=${result.changed} failures=${result.failures}\n`);
+  if (opts.publish) publishSessionEvents(cfg, opts);
   return result;
 }
 
@@ -1333,9 +1367,46 @@ function prepareDaily(cfg, key, opts = {}) {
 function commitArtifacts(cfg, key, targets, opts = {}) {
   run('git', ['add', ...targets], cfg.repoPath);
   const diff = run('git', ['diff', '--cached', '--quiet'], cfg.repoPath, true);
-  if (diff.status !== 0) run('git', ['commit', '-m', `log: ${key} AI worklog`], cfg.repoPath);
+  if (diff.status !== 0) run('git', ['commit', '-m', opts.message || `log: ${key} AI worklog`], cfg.repoPath);
   if (!opts.noPush) run('git', ['push'], cfg.repoPath);
   return diff.status !== 0;
+}
+
+function publishSessionEvents(cfg, opts = {}) {
+  if (!cfg.repoPath) throw new Error('run `onmhj register <git-repo-path>` first');
+  if (!isGitRepo(cfg.repoPath)) throw new Error(`registered path is not a git repo: ${cfg.repoPath}`);
+  if (hasAnySessionFailure(cfg)) throw new Error('unresolved transcript parse failure blocks raw session publish');
+  const lock = publicationLockFile(cfg);
+  if (!acquireLock(lock)) throw new Error('report publication already running');
+  try {
+    assertCleanIndex(cfg.repoPath);
+    const pulled = syncReportRepo(cfg.repoPath);
+    const targets = [];
+    for (const date of localEventDates(cfg, '9999-12-31')) {
+      const target = path.join(cfg.repoPath, 'raw', 'ai-sessions', date + '.jsonl');
+      const events = mergeEvents(loadEvents(target), loadEventsForLocalDate(cfg, date));
+      if (!events.length) continue;
+      const raw = events.map(event => JSON.stringify(event)).join('\n') + '\n';
+      if (fs.existsSync(target) && fs.readFileSync(target, 'utf8') === raw) continue;
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, raw);
+      targets.push(target);
+    }
+    const changed = targets.length > 0 && commitArtifacts(cfg, 'sessions', targets, {
+      ...opts,
+      message: RAW_SESSION_COMMIT_MESSAGE,
+    });
+    writeInternalLog(cfg, 'sessions_publish', {
+      changed,
+      dates: targets.length,
+      pulled,
+      pushed: changed && !opts.noPush,
+    });
+    process.stdout.write(`${changed ? 'published' : 'no raw session changes'} dates=${targets.length}\n`);
+    return { changed, dates: targets.length };
+  } finally {
+    releaseLock(lock);
+  }
 }
 
 function flushUnlocked(date, opts) {
@@ -1557,6 +1628,7 @@ function status() {
     `deviceId: ${cfg.deviceId}`,
     `ownerName: ${cfg.ownerName}`,
     `ownerEmail: ${cfg.ownerEmail || '(unset)'}`,
+    `autoReport: ${cfg.autoReport}`,
     `reportLanguage: ${cfg.reportLanguage}`,
     `reportAuth: ${report.auth}`,
     `reportApiBase: ${cfg.reportApiBaseUrl || '(unset)'}`,
@@ -1740,7 +1812,7 @@ async function main() {
   if (cmd === 'config') return configure(opts);
   if (cmd === 'inject') return inject(opts);
   if (cmd === 'import') return importEvents(first);
-  if (cmd === 'sessions') return sessions();
+  if (cmd === 'sessions') return sessions(opts);
   if (cmd === 'flush') return flush(first && !first.startsWith('--') ? first : undefined, opts);
   if (cmd === 'ejmhj') return runEjmhj(config(), first && !first.startsWith('--') ? first : undefined, opts);
   if (cmd === 'worker') return worker();
@@ -1762,6 +1834,7 @@ module.exports = {
   ingestSessionFiles,
   mergeEvents,
   processReportJobs,
+  publishSessionEvents,
   requestApi,
   readReportJob,
   reportScheduleState,

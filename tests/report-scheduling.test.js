@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -63,6 +64,30 @@ test('report schedule state accepts injected time', () => {
   assert.equal(state.throughDate, '2026-07-09');
   assert.equal(state.localConfirmedThrough, '');
   assert.equal(state.remoteConfirmedFloor, '');
+});
+
+test('autoReport=false prevents SessionStart from creating report jobs', () => {
+  const cfg = createConfig();
+  childProcess.execFileSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'onmhj.js'),
+    'config',
+    '--auto-report=false',
+  ], { env: { ...process.env, ONMHJ_CONFIG: cfg.configPath } });
+
+  const configured = JSON.parse(fs.readFileSync(cfg.configPath, 'utf8'));
+  assert.equal(configured.autoReport, false);
+
+  childProcess.execFileSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'onmhj.js'),
+    'hook',
+    'SessionStart',
+  ], {
+    env: { ...process.env, ONMHJ_CONFIG: cfg.configPath },
+    input: JSON.stringify({ cwd: cfg.repoPath, session_id: 'session-only' }),
+  });
+
+  const jobsDir = path.join(cfg.stateDir, 'jobs', 'reports');
+  assert.equal(fs.existsSync(jobsDir), false);
 });
 
 test('requeues a completed date when its final report is missing', () => {

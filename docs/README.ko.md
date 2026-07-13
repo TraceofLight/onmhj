@@ -73,13 +73,13 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | Command | Purpose |
 | --- | --- |
 | `onmhj register <repo>` | 외부 report repo 설정 |
-| `onmhj config ...` | timezone, device id, owner, language, auth, API 설정 변경 |
+| `onmhj config ...` | timezone, device id, owner, 자동 report, language, auth, API 설정 변경 |
 | `onmhj status` | config, local event 수, confirmed floor, job 수 확인 |
 | `onmhj flush [date]` | event 병합과 raw/daily 근거 발행. 날짜 확정 안 함 |
 | `onmhj ejmhj [date]` | 어제 또는 지정 작업일의 raw/daily/최종보고서 발행 |
 | `onmhj inject --text=...` | 수동 이벤트 1건 추가 |
 | `onmhj import <events.jsonl>` | 정규화 event 또는 OpenAI-compatible request/response capture import |
-| `onmhj sessions` | 알려진 Codex·Claude transcript JSONL 증분 수집 |
+| `onmhj sessions [--publish]` | Codex·Claude transcript 증분 수집 및 선택적 raw-only 단일 커밋 발행 |
 | `onmhj worker` | pending report job 처리 |
 
 plugin command는 같은 CLI로 위임한다. Codex는 `/onmhj ...`, `/ejmhj [date]`를 사용하고 Claude Code는 `/onmhj:onmhj ...`, `/onmhj:ejmhj [date]`를 사용한다.
@@ -108,6 +108,8 @@ OpenAI-compatible capture record는 `provider`, `tsUtc`, `cwd`, 전체 `request`
 ## Canonical Session
 
 `onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 `AISessionTurn`은 안정적인 `sourceId`를 사용하므로 completed turn이 pending turn을 교체하고, 같은 session의 중복 hook preview는 제외한다. `full`은 redaction한 canonical prompt와 answer 전체, `preview`는 각각 앞 300자, `off`는 metadata만 저장한다.
+
+`onmhj config --auto-report=false`를 설정하면 `SessionStart`가 report job을 예약하지 않는다. 이후 `onmhj sessions --publish`는 registered repo를 pull하고 unresolved quarantine이 없는지 확인한 뒤, 모든 local date를 `sourceId` 기준으로 `raw/ai-sessions`에 병합해 커밋과 push를 각각 한 번만 수행한다. `daily/`, `reports/`, report job, confirmation은 변경하지 않는다.
 
 파일 cursor는 `~/.local/state/onmhj/session-ingest/`에 있다. 관련 record 파싱이 실패하면 해당 byte offset에서 멈추고 metadata-only quarantine을 남긴다. 정상 재시도로 quarantine이 해소될 때까지 영향받은 날짜의 최종보고서 확정을 차단한다.
 
@@ -141,7 +143,7 @@ Report repo:
 ## Safety
 
 - hook은 local append만 한다.
-- git sync/push는 `flush` 또는 worker 기반 report job에서만 실행한다.
+- git sync/push는 `sessions --publish`, `flush`, 또는 worker 기반 report job에서만 실행한다.
 - `flush`/worker는 쓰기 전에 pull한다. 직접 report repo를 수정하거나 custom backfill을 실행하면 동일한 pull을 수동으로 먼저 해야 한다.
 - prompt capture 기본값은 `preview`다. 필요하면 `full` 또는 `off`를 쓴다.
 - 최종보고서 재생성은 기존 report의 모든 비제목 줄을 보존해야 하며, 파괴적인 출력은 report 또는 confirmation을 쓰기 전에 거부한다.
