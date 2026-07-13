@@ -98,18 +98,19 @@ function parseCodexRecord(record, previous = {}) {
   }
   if (typeof assistantResponse !== 'string') parserError('codex_invalid_task_complete');
   delete state.turn;
+  const event = {
+    provider: 'codex',
+    sessionId: turn.sessionId,
+    turnId: turn.turnId,
+    tsUtc: turn.tsUtc,
+    cwd: turn.cwd,
+    prompt: turn.prompt,
+    status: assistantResponse ? 'complete' : 'pending',
+  };
+  if (assistantResponse) event.assistantResponse = assistantResponse;
   return {
     state,
-    events: [{
-      provider: 'codex',
-      sessionId: turn.sessionId,
-      turnId: turn.turnId,
-      tsUtc: turn.tsUtc,
-      cwd: turn.cwd,
-      prompt: turn.prompt,
-      assistantResponse,
-      status: 'complete',
-    }],
+    events: [event],
   };
 }
 

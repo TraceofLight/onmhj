@@ -42,6 +42,33 @@ test('Codex parser emits one canonical completed turn', () => {
   }]);
 });
 
+test('answerless Codex completion preserves the prompt as pending', () => {
+  const { events } = parse([{
+    type: 'session_meta',
+    payload: { session_id: 'codex-session', cwd: 'D:\\work\\repo' },
+  }, {
+    type: 'event_msg',
+    timestamp: '2026-07-13T01:00:00.000Z',
+    payload: { type: 'task_started', turn_id: 'answerless-turn' },
+  }, {
+    type: 'event_msg',
+    payload: { type: 'user_message', message: 'human task without a final answer' },
+  }, {
+    type: 'event_msg',
+    payload: { type: 'task_complete', last_agent_message: '' },
+  }], parseCodexRecord);
+
+  assert.deepEqual(events, [{
+    provider: 'codex',
+    sessionId: 'codex-session',
+    turnId: 'answerless-turn',
+    tsUtc: '2026-07-13T01:00:00.000Z',
+    cwd: 'D:\\work\\repo',
+    prompt: 'human task without a final answer',
+    status: 'pending',
+  }]);
+});
+
 test('Codex parser skips a known injected context-only turn', () => {
   const { events, state } = parse([
     {
