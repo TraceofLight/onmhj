@@ -16,7 +16,7 @@ const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
 const DEFAULT_REPORT_API_KEY_ENV = 'ONMHJ_LLM_API_KEY';
 const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 const REPORT_BACKEND_TIMEOUT_MS = 10 * 60 * 1000;
-const SESSION_PARSER_VERSION = 4;
+const SESSION_PARSER_VERSION = 5;
 const RAW_SESSION_COMMIT_MESSAGE = `data(sessions): publish raw AI sessions
 
 작업 의도:
@@ -453,6 +453,36 @@ function upsertEventRecord(cfg, event) {
   return true;
 }
 
+function replaceLocalSessionEvents(cfg, provider, sessionIds, events) {
+  const owned = new Set(sessionIds);
+  const dir = path.join(cfg.stateDir, 'events');
+  let removed = 0;
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter(name => name.endsWith('.jsonl'));
+  } catch {}
+  for (const name of files) {
+    const file = path.join(dir, name);
+    const current = loadEvents(file);
+    const kept = current.filter(event => {
+      const replace = event.event === 'AISessionTurn' &&
+        event.deviceId === cfg.deviceId &&
+        event.provider === provider &&
+        owned.has(event.sessionId);
+      if (replace) removed += 1;
+      return !replace;
+    });
+    if (kept.length === current.length) continue;
+    if (kept.length) fs.writeFileSync(file, kept.map(event => JSON.stringify(event)).join('\n') + '\n');
+    else fs.unlinkSync(file);
+  }
+  let changed = removed;
+  for (const event of events) {
+    if (upsertEventRecord(cfg, event)) changed += 1;
+  }
+  return changed;
+}
+
 function sessionIngestDir(cfg) {
   return path.join(cfg.stateDir, 'session-ingest');
 }
@@ -539,7 +569,10 @@ async function ingestSessionFile(cfg, source, cursors) {
   const file = path.resolve(source.path);
   const stored = cursors.files[file] || {};
   const restart = stored.parserVersion !== SESSION_PARSER_VERSION;
+  const replay = Object.hasOwn(stored, 'parserVersion') && restart;
   let state = copyJson(restart ? {} : (stored.state || {}));
+  const sessionIds = new Set(restart ? [] : (stored.sessionIds || []));
+  const replayEvents = [];
   let changed = 0;
   let failure;
   const parseRecord = parserFor(source.provider);
@@ -550,8 +583,12 @@ async function ingestSessionFile(cfg, source, cursors) {
       record = JSON.parse(line);
       const parsed = parseRecord(record, state);
       state = parsed.state;
+      if (state.sessionId) sessionIds.add(state.sessionId);
       for (const turn of parsed.events) {
-        if (upsertEventRecord(cfg, normalizedSessionEvent(cfg, turn))) changed += 1;
+        if (turn.sessionId) sessionIds.add(turn.sessionId);
+        const event = normalizedSessionEvent(cfg, turn);
+        if (replay) replayEvents.push(event);
+        else if (upsertEventRecord(cfg, event)) changed += 1;
       }
       return true;
     } catch (err) {
@@ -571,9 +608,23 @@ async function ingestSessionFile(cfg, source, cursors) {
 
   if (state.turn && state.turn.prompt) {
     const pending = { ...state.turn, provider: source.provider, status: 'pending' };
-    if (upsertEventRecord(cfg, normalizedSessionEvent(cfg, pending))) changed += 1;
+    if (pending.sessionId) sessionIds.add(pending.sessionId);
+    const event = normalizedSessionEvent(cfg, pending);
+    if (replay) replayEvents.push(event);
+    else if (upsertEventRecord(cfg, event)) changed += 1;
   }
-  cursors.files[file] = { provider: source.provider, offset, parserVersion: SESSION_PARSER_VERSION, state };
+  if (replay && failure) {
+    cursors.files[file] = stored;
+  } else {
+    if (replay) changed += replaceLocalSessionEvents(cfg, source.provider, sessionIds, replayEvents);
+    cursors.files[file] = {
+      provider: source.provider,
+      offset,
+      parserVersion: SESSION_PARSER_VERSION,
+      state,
+      sessionIds: [...sessionIds].sort(),
+    };
+  }
   const quarantine = quarantineFile(cfg, file);
   if (failure) writeJson(quarantine, failure);
   else if (fs.existsSync(quarantine)) fs.unlinkSync(quarantine);

@@ -218,7 +218,112 @@ test('a parser version change restarts stale cursor state', async () => {
 
   assert.deepEqual(result, { changed: 0, failures: 0 });
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
-  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 4);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 5);
+});
+
+test('a successful parser replay replaces stale local turns in its session scope', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'claude.jsonl');
+  const records = [{
+    type: 'user',
+    sessionId: 'claude-replayed-session',
+    uuid: 'real-turn',
+    timestamp: '2026-07-13T02:00:00.000Z',
+    cwd: 'D:\\work\\repo',
+    message: { content: 'real human task' },
+  }, {
+    type: 'assistant',
+    sessionId: 'claude-replayed-session',
+    message: {
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: 'real final answer' }],
+    },
+  }];
+  fs.writeFileSync(transcript, records.map(JSON.stringify).join('\n') + '\n');
+
+  const eventDir = path.join(stateDir, 'events');
+  fs.mkdirSync(eventDir, { recursive: true });
+  fs.writeFileSync(path.join(eventDir, '2026-07-13.jsonl'), JSON.stringify({
+    event: 'AISessionTurn',
+    source: 'claude-transcript',
+    sourceId: 'claude:claude-replayed-session:synthetic-turn',
+    provider: 'claude',
+    sessionId: 'claude-replayed-session',
+    turnId: 'synthetic-turn',
+    tsUtc: '2026-07-13T01:00:00.000Z',
+    localDate: '2026-07-13',
+    deviceId: 'test-device',
+    prompt: 'Base directory for this skill: C:\\skill',
+    status: 'complete',
+  }) + '\n');
+
+  const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
+  fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
+  fs.writeFileSync(cursorFile, JSON.stringify({
+    version: 4,
+    files: {
+      [path.resolve(transcript)]: {
+        provider: 'claude',
+        offset: fs.statSync(transcript).size,
+        parserVersion: 4,
+        state: {},
+      },
+    },
+  }));
+
+  await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'claude', path: transcript }]);
+
+  const events = readEvents(stateDir);
+  const cursor = JSON.parse(fs.readFileSync(cursorFile, 'utf8')).files[path.resolve(transcript)];
+  assert.deepEqual(events.map(event => event.sourceId), ['claude:claude-replayed-session:real-turn']);
+  assert.equal(events[0].prompt, 'real human task');
+  assert.equal(cursor.parserVersion, 5);
+  assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
+});
+
+test('a failed parser replay preserves the old canonical scope and remains replayable', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'claude.jsonl');
+  fs.writeFileSync(transcript, '{broken json}\n');
+
+  const staleEvent = {
+    event: 'AISessionTurn',
+    source: 'claude-transcript',
+    sourceId: 'claude:claude-replayed-session:old-turn',
+    provider: 'claude',
+    sessionId: 'claude-replayed-session',
+    turnId: 'old-turn',
+    tsUtc: '2026-07-13T01:00:00.000Z',
+    localDate: '2026-07-13',
+    deviceId: 'test-device',
+    prompt: 'previously collected task',
+    status: 'complete',
+  };
+  const eventDir = path.join(stateDir, 'events');
+  fs.mkdirSync(eventDir, { recursive: true });
+  fs.writeFileSync(path.join(eventDir, '2026-07-13.jsonl'), JSON.stringify(staleEvent) + '\n');
+
+  const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
+  fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
+  fs.writeFileSync(cursorFile, JSON.stringify({
+    version: 4,
+    files: {
+      [path.resolve(transcript)]: {
+        provider: 'claude',
+        offset: fs.statSync(transcript).size,
+        parserVersion: 4,
+        state: {},
+      },
+    },
+  }));
+
+  const result = await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'claude', path: transcript }]);
+
+  const cursor = JSON.parse(fs.readFileSync(cursorFile, 'utf8')).files[path.resolve(transcript)];
+  assert.deepEqual(result, { changed: 0, failures: 1 });
+  assert.deepEqual(readEvents(stateDir), [staleEvent]);
+  assert.equal(cursor.parserVersion, 4);
+  assert.equal(fs.readdirSync(path.join(stateDir, 'session-ingest', 'quarantine')).length, 1);
 });
 
 test('pending turn is replaced after transcript completion is appended', async () => {
