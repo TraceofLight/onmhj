@@ -22,6 +22,7 @@ Add sanitized record sequences for:
 
 - a `task_started` turn whose `response_item` user blocks contain only `recommended_plugins`, `AGENTS.md`, and `environment_context`;
 - a prompt-less turn containing `inter_agent_communication_metadata`;
+- an exact empty `task_started` → `task_complete` no-op;
 - an unknown prompt-less turn.
 
 Assert the first two sequences emit no event and leave no active turn. Assert the unknown sequence still throws `codex_missing_user_message`.
@@ -45,7 +46,7 @@ const CODEX_INTERNAL_CONTEXT_PREFIXES = [
 ];
 ```
 
-Mark the current turn internal only when every text block in a `response_item/message/user` record matches a known prefix, or when `inter_agent_communication_metadata` is present. At `task_complete`, skip only an internal turn with no prompt. Keep all unknown prompt-less turns fail closed.
+Mark the current turn internal only when every text block in a `response_item/message/user` record matches a known prefix, or when `inter_agent_communication_metadata` is present. Track whether any intermediate record was observed. At `task_complete`, skip an internal prompt-less turn or an exact empty no-op; keep prompt-less turns with unknown intermediate records fail closed.
 
 Increment the session parser version. When a stored file cursor has an older parser version, restart that file from offset `0` with empty parser state so earlier context markers are available. Stable `sourceId` upsert prevents duplicate events.
 

@@ -45,6 +45,10 @@ function parseCodexRecord(record, previous = {}) {
     return { state, events: [] };
   }
 
+  const taskBoundary = record.type === 'event_msg' &&
+    ['task_started', 'task_complete'].includes(payload.type);
+  if (state.turn && !taskBoundary) state.turn = { ...state.turn, sawIntermediate: true };
+
   if (record.type !== 'event_msg') return { state, events: [] };
   if (payload.type === 'task_started') {
     if (typeof payload.turn_id !== 'string') parserError('codex_invalid_task_started');
@@ -84,7 +88,7 @@ function parseCodexRecord(record, previous = {}) {
     ? payload.last_agent_message
     : turn.assistantResponse;
   if (typeof turn.prompt !== 'string' || !turn.prompt) {
-    if (turn.internal) {
+    if (turn.internal || !turn.sawIntermediate) {
       delete state.turn;
       return { state, events: [] };
     }

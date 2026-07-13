@@ -47,6 +47,7 @@ Read the JSONL event stream between `task_started` and `task_complete`.
 - Fallback for an incomplete tail: `event_msg/agent_message` with `phase=final_answer`.
 - Ignore duplicate `response_item` user and assistant messages, developer instructions, reasoning, world state, and compaction summaries.
 - A Codex internal rollout may contain `task_started` and `task_complete` without a human prompt. Treat it as context-only only when the turn contains an explicit inter-agent marker or every `response_item` user text block is a known injected context (`recommended_plugins`, `codex_internal_context`, `AGENTS.md`, or `environment_context`). Complete that turn without emitting `AISessionTurn`.
+- Treat an exact empty `task_started` → `task_complete` no-op with no intermediate record as context-only because it contains no prompt or recoverable activity.
 - Keep unknown prompt-less turns fail closed. Known context blocks classify internal rollouts only; they never become prompt evidence.
 
 ### Claude

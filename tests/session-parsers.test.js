@@ -89,6 +89,23 @@ test('Codex parser skips a prompt-less inter-agent turn', () => {
   assert.equal(state.turn, undefined);
 });
 
+test('Codex parser skips an empty prompt-less no-op turn', () => {
+  const { events, state } = parse([
+    {
+      type: 'event_msg',
+      timestamp: '2026-03-15T14:55:17.000Z',
+      payload: { type: 'task_started', turn_id: 'empty-no-op' },
+    },
+    {
+      type: 'event_msg',
+      payload: { type: 'task_complete', last_agent_message: '' },
+    },
+  ], parseCodexRecord);
+
+  assert.deepEqual(events, []);
+  assert.equal(state.turn, undefined);
+});
+
 test('Codex parser rejects an unknown prompt-less turn', () => {
   assert.throws(
     () => parse([
@@ -96,6 +113,14 @@ test('Codex parser rejects an unknown prompt-less turn', () => {
         type: 'event_msg',
         timestamp: '2026-07-13T01:00:00.000Z',
         payload: { type: 'task_started', turn_id: 'unknown' },
+      },
+      {
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'unknown injected record' }],
+        },
       },
       {
         type: 'event_msg',

@@ -4,6 +4,7 @@
 
 - Added deterministic Codex, Claude, and OpenAI-compatible session-turn normalization with final assistant evidence.
 - Added incremental transcript cursors, metadata-only quarantine, retry, and affected-date confirmation blocking.
+- Skipped known Codex internal/context-only and empty no-op turns, and replayed stale file cursors after parser upgrades.
 - Prevented final-report regeneration from removing prior report content.
 
 ## 0.1.13 - 2026-07-12
