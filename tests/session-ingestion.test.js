@@ -340,6 +340,102 @@ test('a failed parser replay preserves the old canonical scope and remains repla
   assert.equal(fs.readdirSync(path.join(stateDir, 'session-ingest', 'quarantine')).length, 1);
 });
 
+test('a replay storage failure rolls back the previous canonical scope', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'claude.jsonl');
+  fs.writeFileSync(transcript, [{
+    type: 'user',
+    sessionId: 'rollback-session',
+    uuid: 'new-turn',
+    timestamp: '2026-07-13T02:00:00.000Z',
+    message: { content: 'new task' },
+  }, {
+    type: 'assistant',
+    sessionId: 'rollback-session',
+    message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'new answer' }] },
+  }].map(JSON.stringify).join('\n') + '\n');
+
+  const oldEvent = {
+    event: 'AISessionTurn',
+    source: 'claude-transcript',
+    sourceId: 'claude:rollback-session:old-turn',
+    provider: 'claude',
+    sessionId: 'rollback-session',
+    turnId: 'old-turn',
+    tsUtc: '2026-07-13T01:00:00.000Z',
+    localDate: '2026-07-13',
+    deviceId: 'test-device',
+    prompt: 'old task',
+  };
+  const eventDir = path.join(stateDir, 'events');
+  fs.mkdirSync(eventDir, { recursive: true });
+  fs.writeFileSync(path.join(eventDir, '2026-07-13.jsonl'), JSON.stringify(oldEvent) + '\n');
+
+  const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
+  fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
+  fs.writeFileSync(cursorFile, JSON.stringify({
+    version: 4,
+    files: {
+      [path.resolve(transcript)]: {
+        provider: 'claude',
+        offset: fs.statSync(transcript).size,
+        parserVersion: 4,
+        state: {},
+      },
+    },
+  }));
+
+  const writeFileSync = fs.writeFileSync;
+  const appendFileSync = fs.appendFileSync;
+  const storageFailure = file => String(file).startsWith(eventDir + path.sep);
+  fs.writeFileSync = (file, ...args) => {
+    if (storageFailure(file)) throw new Error('injected replay storage failure');
+    return writeFileSync(file, ...args);
+  };
+  fs.appendFileSync = (file, ...args) => {
+    if (storageFailure(file)) throw new Error('injected replay storage failure');
+    return appendFileSync(file, ...args);
+  };
+  try {
+    await assert.rejects(
+      () => onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'claude', path: transcript }]),
+      /injected replay storage failure/,
+    );
+  } finally {
+    fs.writeFileSync = writeFileSync;
+    fs.appendFileSync = appendFileSync;
+  }
+
+  assert.deepEqual(readEvents(stateDir), [oldEvent]);
+  const cursor = JSON.parse(fs.readFileSync(cursorFile, 'utf8')).files[path.resolve(transcript)];
+  assert.equal(cursor.parserVersion, 4);
+});
+
+test('session ingestion recovers an interrupted replay transaction before parsing', async () => {
+  const stateDir = tempDir();
+  const eventDir = path.join(stateDir, 'events');
+  const ingestDir = path.join(stateDir, 'session-ingest');
+  fs.mkdirSync(eventDir, { recursive: true });
+  fs.mkdirSync(ingestDir, { recursive: true });
+  const target = path.join(eventDir, '2026-07-13.jsonl');
+  const backup = path.join(eventDir, '.2026-07-13.jsonl.replay-backup');
+  const temporary = path.join(eventDir, '.2026-07-13.jsonl.replay-next');
+  const oldRaw = JSON.stringify({ sourceId: 'old-canonical' }) + '\n';
+  fs.writeFileSync(target, JSON.stringify({ sourceId: 'partially-installed' }) + '\n');
+  fs.writeFileSync(backup, oldRaw);
+  fs.writeFileSync(temporary, JSON.stringify({ sourceId: 'staged-next' }) + '\n');
+  fs.writeFileSync(path.join(ingestDir, 'replay-journal.json'), JSON.stringify({
+    files: [{ target, backup, temporary, existed: true }],
+  }));
+
+  await onmhj.ingestSessionFiles(cfg(stateDir), []);
+
+  assert.equal(fs.readFileSync(target, 'utf8'), oldRaw);
+  assert.equal(fs.existsSync(backup), false);
+  assert.equal(fs.existsSync(temporary), false);
+  assert.equal(fs.existsSync(path.join(ingestDir, 'replay-journal.json')), false);
+});
+
 test('pending turn is replaced after transcript completion is appended', async () => {
   const stateDir = tempDir();
   const transcript = path.join(stateDir, 'codex.jsonl');
