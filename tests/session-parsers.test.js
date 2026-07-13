@@ -42,6 +42,70 @@ test('Codex parser emits one canonical completed turn', () => {
   }]);
 });
 
+test('Codex parser skips a known injected context-only turn', () => {
+  const { events, state } = parse([
+    {
+      type: 'event_msg',
+      timestamp: '2026-07-13T01:00:00.000Z',
+      payload: { type: 'task_started', turn_id: 'internal-context' },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: '<recommended_plugins>internal</recommended_plugins>' },
+          { type: 'input_text', text: '# AGENTS.md instructions\ninternal' },
+          { type: 'input_text', text: '<environment_context>internal</environment_context>' },
+        ],
+      },
+    },
+    {
+      type: 'event_msg',
+      payload: { type: 'task_complete', last_agent_message: 'internal result' },
+    },
+  ], parseCodexRecord);
+
+  assert.deepEqual(events, []);
+  assert.equal(state.turn, undefined);
+});
+
+test('Codex parser skips a prompt-less inter-agent turn', () => {
+  const { events, state } = parse([
+    {
+      type: 'event_msg',
+      timestamp: '2026-07-13T01:00:00.000Z',
+      payload: { type: 'task_started', turn_id: 'inter-agent' },
+    },
+    { type: 'inter_agent_communication_metadata', payload: {} },
+    {
+      type: 'event_msg',
+      payload: { type: 'task_complete', last_agent_message: 'internal result' },
+    },
+  ], parseCodexRecord);
+
+  assert.deepEqual(events, []);
+  assert.equal(state.turn, undefined);
+});
+
+test('Codex parser rejects an unknown prompt-less turn', () => {
+  assert.throws(
+    () => parse([
+      {
+        type: 'event_msg',
+        timestamp: '2026-07-13T01:00:00.000Z',
+        payload: { type: 'task_started', turn_id: 'unknown' },
+      },
+      {
+        type: 'event_msg',
+        payload: { type: 'task_complete', last_agent_message: 'unknown result' },
+      },
+    ], parseCodexRecord),
+    err => err.code === 'codex_missing_user_message',
+  );
+});
+
 test('Claude parser ignores tool-result users and emits one human turn', () => {
   const { events } = parse(fixture('claude-transcript.jsonl'), parseClaudeRecord);
 

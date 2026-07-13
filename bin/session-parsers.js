@@ -9,6 +9,23 @@ function parserError(code) {
   throw new SessionParserError(code);
 }
 
+const CODEX_INTERNAL_CONTEXT_PREFIXES = [
+  '<recommended_plugins',
+  '<codex_internal_context',
+  '# AGENTS.md instructions',
+  '<environment_context>',
+];
+
+function codexContextOnlyUser(payload) {
+  if (payload.type !== 'message' || payload.role !== 'user' || !Array.isArray(payload.content)) return false;
+  if (!payload.content.length) return false;
+  return payload.content.every(block => {
+    if (!block || block.type !== 'input_text' || typeof block.text !== 'string') return false;
+    const text = block.text.trimStart();
+    return CODEX_INTERNAL_CONTEXT_PREFIXES.some(prefix => text.startsWith(prefix));
+  });
+}
+
 function parseCodexRecord(record, previous = {}) {
   const state = { ...previous };
   const payload = record && record.payload;
@@ -19,6 +36,12 @@ function parseCodexRecord(record, previous = {}) {
   if (record.type === 'session_meta') {
     state.sessionId = String(payload.session_id || payload.id || state.sessionId || '');
     state.cwd = String(payload.cwd || state.cwd || '');
+    return { state, events: [] };
+  }
+
+  if (record.type === 'inter_agent_communication_metadata' ||
+      (record.type === 'response_item' && codexContextOnlyUser(payload))) {
+    if (state.turn) state.turn = { ...state.turn, internal: true };
     return { state, events: [] };
   }
 
@@ -60,7 +83,13 @@ function parseCodexRecord(record, previous = {}) {
   const assistantResponse = typeof payload.last_agent_message === 'string'
     ? payload.last_agent_message
     : turn.assistantResponse;
-  if (typeof turn.prompt !== 'string' || !turn.prompt) parserError('codex_missing_user_message');
+  if (typeof turn.prompt !== 'string' || !turn.prompt) {
+    if (turn.internal) {
+      delete state.turn;
+      return { state, events: [] };
+    }
+    parserError('codex_missing_user_message');
+  }
   if (typeof assistantResponse !== 'string') parserError('codex_invalid_task_complete');
   delete state.turn;
   return {
