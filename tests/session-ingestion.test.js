@@ -243,7 +243,7 @@ test('a successful parser replay replaces stale local turns in its session scope
 
   const eventDir = path.join(stateDir, 'events');
   fs.mkdirSync(eventDir, { recursive: true });
-  fs.writeFileSync(path.join(eventDir, '2026-07-13.jsonl'), JSON.stringify({
+  const staleTranscript = {
     event: 'AISessionTurn',
     source: 'claude-transcript',
     sourceId: 'claude:claude-replayed-session:synthetic-turn',
@@ -255,7 +255,18 @@ test('a successful parser replay replaces stale local turns in its session scope
     deviceId: 'test-device',
     prompt: 'Base directory for this skill: C:\\skill',
     status: 'complete',
-  }) + '\n');
+  };
+  const independentCapture = {
+    ...staleTranscript,
+    source: 'openai-capture',
+    sourceId: 'openai:claude-replayed-session:independent-turn',
+    turnId: 'independent-turn',
+    prompt: 'independently captured task',
+  };
+  fs.writeFileSync(
+    path.join(eventDir, '2026-07-13.jsonl'),
+    [staleTranscript, independentCapture].map(event => JSON.stringify(event)).join('\n') + '\n',
+  );
 
   const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
   fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
@@ -275,8 +286,11 @@ test('a successful parser replay replaces stale local turns in its session scope
 
   const events = readEvents(stateDir);
   const cursor = JSON.parse(fs.readFileSync(cursorFile, 'utf8')).files[path.resolve(transcript)];
-  assert.deepEqual(events.map(event => event.sourceId), ['claude:claude-replayed-session:real-turn']);
-  assert.equal(events[0].prompt, 'real human task');
+  assert.deepEqual(events.map(event => event.sourceId).sort(), [
+    'claude:claude-replayed-session:real-turn',
+    'openai:claude-replayed-session:independent-turn',
+  ]);
+  assert.equal(events.find(event => event.sourceId.startsWith('claude:')).prompt, 'real human task');
   assert.equal(cursor.parserVersion, 5);
   assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
 });
@@ -440,6 +454,7 @@ test('raw session publish reconciles current-device sessions without touching un
   fs.mkdirSync(rawDir, { recursive: true });
   fs.writeFileSync(path.join(rawDir, '2026-07-12.jsonl'), JSON.stringify({
     event: 'AISessionTurn',
+    source: 'claude-transcript',
     sourceId: 'claude:reconciled-session:stale-only-turn',
     turnId: 'stale-only-turn',
     tsUtc: '2026-07-12T01:00:00.000Z',
@@ -450,6 +465,7 @@ test('raw session publish reconciles current-device sessions without touching un
 
   const stored = [{
     event: 'AISessionTurn',
+    source: 'claude-transcript',
     sourceId: 'claude:reconciled-session:synthetic-turn',
     turnId: 'synthetic-turn',
     tsUtc: '2026-07-13T00:00:00.000Z',
@@ -458,6 +474,7 @@ test('raw session publish reconciles current-device sessions without touching un
     ...scope,
   }, {
     event: 'AISessionTurn',
+    source: 'claude-transcript',
     sourceId: 'claude:reconciled-session:old-real-turn',
     turnId: 'old-real-turn',
     tsUtc: '2026-07-13T00:01:00.000Z',
@@ -491,6 +508,15 @@ test('raw session publish reconciles current-device sessions without touching un
     tsUtc: '2026-07-13T00:04:00.000Z',
     localDate: '2026-07-13',
     prompt: 'manual evidence',
+  }, {
+    event: 'AISessionTurn',
+    source: 'openai-capture',
+    sourceId: 'openai:keep-independent-capture',
+    turnId: 'keep-independent-capture',
+    tsUtc: '2026-07-13T00:04:30.000Z',
+    localDate: '2026-07-13',
+    prompt: 'independent canonical evidence',
+    ...scope,
   }, {
     event: 'GitCommit',
     sourceId: 'git:keep',
@@ -546,6 +572,7 @@ test('raw session publish reconciles current-device sessions without touching un
     'claude:reconciled-session:new-real-turn',
     'git:keep',
     'manual:keep',
+    'openai:keep-independent-capture',
   ]);
 });
 

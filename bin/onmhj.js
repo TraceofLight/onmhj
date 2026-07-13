@@ -453,6 +453,11 @@ function upsertEventRecord(cfg, event) {
   return true;
 }
 
+function isTranscriptSessionEvent(event) {
+  return event.event === 'AISessionTurn' &&
+    event.source === `${event.provider}-transcript`;
+}
+
 function replaceLocalSessionEvents(cfg, provider, sessionIds, events) {
   const owned = new Set(sessionIds);
   const dir = path.join(cfg.stateDir, 'events');
@@ -465,7 +470,7 @@ function replaceLocalSessionEvents(cfg, provider, sessionIds, events) {
     const file = path.join(dir, name);
     const current = loadEvents(file);
     const kept = current.filter(event => {
-      const replace = event.event === 'AISessionTurn' &&
+      const replace = isTranscriptSessionEvent(event) &&
         event.deviceId === cfg.deviceId &&
         event.provider === provider &&
         owned.has(event.sessionId);
@@ -1078,7 +1083,7 @@ function reconciledSessionScopes(cfg) {
 }
 
 function isReconciledSessionEvent(event, scopes) {
-  return event.event === 'AISessionTurn' && scopes.has(sessionScopeKey(
+  return isTranscriptSessionEvent(event) && scopes.has(sessionScopeKey(
     event.deviceId,
     event.provider,
     event.sessionId,
