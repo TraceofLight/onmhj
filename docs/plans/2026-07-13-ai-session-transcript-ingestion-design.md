@@ -46,6 +46,8 @@ Read the JSONL event stream between `task_started` and `task_complete`.
 - Final answer: `task_complete.last_agent_message`.
 - Fallback for an incomplete tail: `event_msg/agent_message` with `phase=final_answer`.
 - Ignore duplicate `response_item` user and assistant messages, developer instructions, reasoning, world state, and compaction summaries.
+- A Codex internal rollout may contain `task_started` and `task_complete` without a human prompt. Treat it as context-only only when the turn contains an explicit inter-agent marker or every `response_item` user text block is a known injected context (`recommended_plugins`, `codex_internal_context`, `AGENTS.md`, or `environment_context`). Complete that turn without emitting `AISessionTurn`.
+- Keep unknown prompt-less turns fail closed. Known context blocks classify internal rollouts only; they never become prompt evidence.
 
 ### Claude
 
@@ -106,6 +108,7 @@ Validation failure leaves the old report and both local and remote confirmation 
 ## Verification
 
 - Fixture tests for Codex duplicate records, completed and incomplete turns, and schema failures.
+- Codex regression tests proving known context-only and inter-agent turns are skipped while unknown prompt-less turns remain parse failures.
 - Fixture tests for Claude human prompts, tool results, split assistant records, branches, and schema failures.
 - OpenAI-compatible tests for GLM-style `reasoning_content`, vLLM `reasoning`, string/object tool arguments, and DSML rejection.
 - Cursor, quarantine, retry, sourceId upsert, legacy preview replacement, and confirmation blocking tests.
