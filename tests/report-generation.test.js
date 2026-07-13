@@ -111,6 +111,14 @@ test('builds a final-report prompt for the work date and evidence', () => {
   assert.match(prompt, /도구를 사용하지/);
 });
 
+test('report prompt includes prior content with a verbatim preservation rule', () => {
+  const previous = validReport().replace('- 변경 필요', '- 기존 고유 내용');
+  const prompt = onmhj.buildReportPrompt(date, 'daily', 'raw', 'ko', previous);
+
+  assert.match(prompt, /기존 고유 내용/);
+  assert.match(prompt, /그대로 보존/);
+});
+
 test('accepts a report with the exact work-date heading and required sections', () => {
   assert.equal(onmhj.validateReport(validReport(), date), validReport());
 });
@@ -148,6 +156,17 @@ test('rejects duplicated or out-of-order report sections', () => {
     ),
     /order/,
   );
+});
+
+test('rejects regeneration that drops a prior non-heading line', () => {
+  const previous = validReport().replace('- 변경 필요', '- 기존 고유 내용');
+
+  assert.throws(
+    () => onmhj.validateReport(validReport(), date, 'ko', previous),
+    /preserve prior report content/,
+  );
+  assert.equal(onmhj.validateReport(previous, date, 'ko', previous), previous);
+  assert.equal(onmhj.validateReport(previous, date, 'ko', previous.replace(/\n/g, '\r\n')), previous);
 });
 
 test('builds and validates the English final-report contract', () => {
@@ -431,6 +450,48 @@ test('full pipeline commits raw, daily, report, and confirmation for the same wo
   ));
   assert.equal(localConfirmation.confirmedThrough, date);
   assert.equal(childProcess.execFileSync('git', ['status', '--short'], { cwd: cfg.repoPath, encoding: 'utf8' }), '');
+});
+
+test('daily evidence includes the canonical final assistant response', async () => {
+  const cfg = createRuntime();
+  fs.appendFileSync(path.join(cfg.stateDir, 'events', `${date}.jsonl`), JSON.stringify({
+    schemaVersion: 1,
+    event: 'AISessionTurn',
+    source: 'codex-transcript',
+    sourceId: 'codex:session:turn',
+    provider: 'codex',
+    sessionId: 'session',
+    turnId: 'turn',
+    tsUtc: `${date}T02:00:00.000Z`,
+    localDate: date,
+    timeZone: 'Asia/Seoul',
+    deviceId: 'test-device',
+    cwd: cfg.repoPath,
+    prompt: 'canonical task',
+    assistantResponse: 'canonical final answer',
+    status: 'complete',
+  }) + '\n');
+
+  await onmhj.runFullReport(cfg, date, { noPush: true, generateReport: async () => validReport() });
+
+  const daily = fs.readFileSync(path.join(cfg.repoPath, 'daily', `${date}.md`), 'utf8');
+  assert.match(daily, /AI 응답/);
+  assert.match(daily, /canonical final answer/);
+});
+
+test('full pipeline leaves an existing report untouched when regenerated content is destructive', async () => {
+  const cfg = createRuntime();
+  const reportTarget = path.join(cfg.repoPath, 'reports', `${date}.md`);
+  const previous = validReport().replace('- 변경 필요', '- 기존 고유 내용');
+  fs.mkdirSync(path.dirname(reportTarget), { recursive: true });
+  fs.writeFileSync(reportTarget, previous);
+
+  await assert.rejects(
+    () => onmhj.runFullReport(cfg, date, { noPush: true, generateReport: async () => validReport() }),
+    /preserve prior report content/,
+  );
+
+  assert.equal(fs.readFileSync(reportTarget, 'utf8'), previous);
 });
 
 test('report generation failure does not write confirmation', async () => {
