@@ -7,6 +7,7 @@ const childProcess = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const hookConfig = JSON.parse(fs.readFileSync(path.join(root, '.codex', 'hooks.json'), 'utf8'));
+const codexManifest = JSON.parse(fs.readFileSync(path.join(root, '.codex-plugin', 'plugin.json'), 'utf8'));
 
 function commandHooks(eventName) {
   return hookConfig.hooks[eventName].flatMap(group => group.hooks);
@@ -19,6 +20,24 @@ test('Codex hooks define Windows commands for command hooks', () => {
       assert.notEqual(hook.commandWindows.trim(), '');
     }
   }
+});
+
+test('Codex manifest exposes bundled hooks file', () => {
+  assert.equal(codexManifest.hooks, './.codex/hooks.json');
+});
+
+test('Codex POSIX hooks use node resolver wrapper', () => {
+  for (const eventName of ['SessionStart', 'UserPromptSubmit']) {
+    for (const hook of commandHooks(eventName)) {
+      assert.match(hook.command, /bin\/onmhj-node/);
+      assert.doesNotMatch(hook.command, /exec node /);
+    }
+  }
+});
+
+test('node resolver wrapper is executable', () => {
+  const mode = fs.statSync(path.join(root, 'bin', 'onmhj-node')).mode;
+  assert.equal(Boolean(mode & 0o111), true);
 });
 
 test('Codex Windows hook commands run in PowerShell', { skip: process.platform !== 'win32' }, () => {

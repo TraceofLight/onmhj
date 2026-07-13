@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${ONMHJ_ROOT:-}}}\"; [ -n \"$ONMHJ_ROOT\" ] || exit 0; exec node \"$ONMHJ_ROOT/bin/onmhj.js\" hook SessionStart",
-            "commandWindows": "$ONMHJ_ROOT = if ($env:CLAUDE_PLUGIN_ROOT) { $env:CLAUDE_PLUGIN_ROOT } elseif ($env:CODEX_PLUGIN_ROOT) { $env:CODEX_PLUGIN_ROOT } elseif ($env:ONMHJ_ROOT) { $env:ONMHJ_ROOT } else { '' }; if (-not $ONMHJ_ROOT) { exit 0 }; node (Join-Path $ONMHJ_ROOT 'bin\\onmhj.js') hook SessionStart",
+            "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${ONMHJ_ROOT:-}}}\"; [ -n \"$ONMHJ_ROOT\" ] || exit 0; exec \"$ONMHJ_ROOT/bin/onmhj-node\" \"$ONMHJ_ROOT/bin/onmhj.js\" hook SessionStart",
+            "commandWindows": "$ONMHJ_ROOT = if ($env:CLAUDE_PLUGIN_ROOT) { $env:CLAUDE_PLUGIN_ROOT } elseif ($env:CODEX_PLUGIN_ROOT) { $env:CODEX_PLUGIN_ROOT } elseif ($env:ONMHJ_ROOT) { $env:ONMHJ_ROOT } else { '' }; if (-not $ONMHJ_ROOT) { exit 0 }; $node = (Get-Command node -ErrorAction SilentlyContinue).Source; if ($node) { & $node (Join-Path $ONMHJ_ROOT 'bin\\onmhj.js') hook SessionStart; exit $LASTEXITCODE }; if (Get-Command mise -ErrorAction SilentlyContinue) { mise exec -- node (Join-Path $ONMHJ_ROOT 'bin\\onmhj.js') hook SessionStart; exit $LASTEXITCODE }; exit 0",
             "timeout": 5,
             "statusMessage": "Recording onmhj session..."
           }
@@ -19,8 +19,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${ONMHJ_ROOT:-}}}\"; [ -n \"$ONMHJ_ROOT\" ] || exit 0; exec node \"$ONMHJ_ROOT/bin/onmhj.js\" hook UserPromptSubmit",
-            "commandWindows": "$ONMHJ_ROOT = if ($env:CLAUDE_PLUGIN_ROOT) { $env:CLAUDE_PLUGIN_ROOT } elseif ($env:CODEX_PLUGIN_ROOT) { $env:CODEX_PLUGIN_ROOT } elseif ($env:ONMHJ_ROOT) { $env:ONMHJ_ROOT } else { '' }; if (-not $ONMHJ_ROOT) { exit 0 }; node (Join-Path $ONMHJ_ROOT 'bin\\onmhj.js') hook UserPromptSubmit",
+            "command": "ONMHJ_ROOT=\"${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${ONMHJ_ROOT:-}}}\"; [ -n \"$ONMHJ_ROOT\" ] || exit 0; exec \"$ONMHJ_ROOT/bin/onmhj-node\" \"$ONMHJ_ROOT/bin/onmhj.js\" hook UserPromptSubmit",
+            "commandWindows": "$ONMHJ_ROOT = if ($env:CLAUDE_PLUGIN_ROOT) { $env:CLAUDE_PLUGIN_ROOT } elseif ($env:CODEX_PLUGIN_ROOT) { $env:CODEX_PLUGIN_ROOT } elseif ($env:ONMHJ_ROOT) { $env:ONMHJ_ROOT } else { '' }; if (-not $ONMHJ_ROOT) { exit 0 }; $node = (Get-Command node -ErrorAction SilentlyContinue).Source; if ($node) { & $node (Join-Path $ONMHJ_ROOT 'bin\\onmhj.js') hook UserPromptSubmit; exit $LASTEXITCODE }; if (Get-Command mise -ErrorAction SilentlyContinue) { mise exec -- node (Join-Path $ONMHJ_ROOT 'bin\\onmhj.js') hook UserPromptSubmit; exit $LASTEXITCODE }; exit 0",
             "timeout": 5,
             "statusMessage": "Recording onmhj prompt..."
           }

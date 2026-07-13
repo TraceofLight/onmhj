@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+if command -v node >/dev/null 2>&1; then
+  exec node "$@"
+fi
+
+if command -v mise >/dev/null 2>&1; then
+  exec mise exec -- node "$@"
+fi
+
+if [ -x "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" ]; then
+  exec "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" "$@"
+fi
+
+echo "onmhj: node not found" >&2
+exit 127
