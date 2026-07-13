@@ -280,15 +280,20 @@ test('Claude command envelopes clear an unfinished human turn', () => {
 });
 
 test('Claude parser rejects an unclassified user content shape', () => {
-  assert.throws(
-    () => parseClaudeRecord({
-      type: 'user',
-      sessionId: 'claude-session',
-      uuid: 'unknown-shape',
-      message: { content: [{ type: 'protocol', value: 'unknown' }] },
-    }),
-    err => err.code === 'claude_unclassified_user_message',
-  );
+  for (const content of [
+    [{ type: 'protocol', value: 'unknown' }],
+    [{ type: 'text', text: 'apparently human text' }, { type: 'protocol', value: 'unknown' }],
+  ]) {
+    assert.throws(
+      () => parseClaudeRecord({
+        type: 'user',
+        sessionId: 'claude-session',
+        uuid: 'unknown-shape',
+        message: { content },
+      }),
+      err => err.code === 'claude_unclassified_user_message',
+    );
+  }
 });
 
 test('relevant malformed shapes fail without content in the error', () => {

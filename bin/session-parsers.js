@@ -118,6 +118,7 @@ function humanClaudePrompt(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return undefined;
   if (content.some(block => block && block.type === 'tool_result')) return null;
+  if (!content.every(block => block && ['text', 'image'].includes(block.type))) return undefined;
   const text = content
     .filter(block => block && block.type === 'text')
     .map(block => typeof block.text === 'string' ? block.text : parserError('claude_invalid_user_message'))
