@@ -37,7 +37,7 @@ test('Codex POSIX hooks use node resolver wrapper', () => {
   }
 });
 
-test('node resolver wrapper is executable', () => {
+test('node resolver wrapper is executable', { skip: process.platform === 'win32' }, () => {
   const mode = fs.statSync(path.join(root, 'bin', 'onmhj-node')).mode;
   assert.equal(Boolean(mode & 0o111), true);
 });
