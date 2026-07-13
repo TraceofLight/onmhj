@@ -1,6 +1,6 @@
 {
   "name": "onmhj",
-  "version": "0.1.13+codex.20260713012251",
+  "version": "0.1.13+codex.20260713012641",
   "description": "Local AI-session capture with automatic final reports and ordered retries.",
   "author": {
     "name": "onmhj maintainers"
@@ -13,7 +13,7 @@
     "hooks",
     "git"
   ],
-  "hooks": "./.codex/hooks.json",
+  "hooks": "./hooks/codex-hooks.json",
   "interface": {
     "displayName": "Onmhj",
     "shortDescription": "Record AI-session worklogs locally.",

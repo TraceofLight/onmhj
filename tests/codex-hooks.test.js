@@ -7,6 +7,7 @@ const childProcess = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const hookConfig = JSON.parse(fs.readFileSync(path.join(root, '.codex', 'hooks.json'), 'utf8'));
+const legacyHookConfig = JSON.parse(fs.readFileSync(path.join(root, 'hooks', 'codex-hooks.json'), 'utf8'));
 const codexManifest = JSON.parse(fs.readFileSync(path.join(root, '.codex-plugin', 'plugin.json'), 'utf8'));
 
 function commandHooks(eventName) {
@@ -23,7 +24,8 @@ test('Codex hooks define Windows commands for command hooks', () => {
 });
 
 test('Codex manifest exposes bundled hooks file', () => {
-  assert.equal(codexManifest.hooks, './.codex/hooks.json');
+  assert.equal(codexManifest.hooks, './hooks/codex-hooks.json');
+  assert.deepEqual(legacyHookConfig, hookConfig);
 });
 
 test('Codex POSIX hooks use node resolver wrapper', () => {
