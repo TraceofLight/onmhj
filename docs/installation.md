@@ -157,6 +157,14 @@ Bulk import normalized JSONL:
 node /path/to/onmhj/bin/onmhj.js import /tmp/onmhj-backfill.jsonl
 ```
 
+Scan local Codex and Claude transcripts after installation or update:
+
+```sh
+node /path/to/onmhj/bin/onmhj.js sessions
+```
+
+The first scan records per-file byte cursors under `~/.local/state/onmhj/session-ingest/`. Parser failures create metadata-only quarantine entries and block final-report confirmation for the affected date until the same command retries successfully. OpenAI-compatible clients or proxies can instead import JSONL records containing `provider`, `tsUtc`, `cwd`, `request`, and `response`.
+
 Imported events go to `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`; run `flush YYYY-MM-DD` to write the report repo.
 
 When importing git history, prefilter commits to the configured owner identity. Include only commits where author or committer matches the configured owner name or email. This prevents team repo history from being reported as the user's own work.
@@ -166,6 +174,8 @@ Each imported event gets the configured `deviceId` unless the JSONL already incl
 ## Privacy
 
 `onmhj` redacts common token, password, secret, API key, bearer token, and private-key patterns before writing prompt text to local events or report repos.
+
+`--prompt=full` stores redacted canonical prompts and final answers. `preview` stores the first 300 characters of each canonical value. `off` stores session metadata only. Reasoning fields and tool arguments from compatible API captures are never persisted.
 
 This is a best-effort guard, not a full secret scanner. Keep `--prompt=preview` as the default. Use `--prompt=off` when working with credentials-heavy sessions.
 

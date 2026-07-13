@@ -78,7 +78,8 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj flush [date]` | Merge events and publish raw/daily evidence without confirming the date. |
 | `onmhj ejmhj [date]` | Publish raw/daily/final report for yesterday or the specified work date. |
 | `onmhj inject --text=...` | Add one normalized manual event. |
-| `onmhj import <events.jsonl>` | Bulk import normalized JSONL events. |
+| `onmhj import <events.jsonl>` | Import normalized events or OpenAI-compatible request/response captures. |
+| `onmhj sessions` | Incrementally scan known Codex and Claude transcript JSONL. |
 | `onmhj worker` | Process pending report jobs in the background. |
 
 Plugin commands delegate to the same CLI: Codex uses `/onmhj ...` and `/ejmhj [date]`; Claude Code uses `/onmhj:onmhj ...` and `/onmhj:ejmhj [date]`.
@@ -102,6 +103,14 @@ Bulk import:
 node bin/onmhj.js import /tmp/onmhj-backfill.jsonl
 ```
 
+An OpenAI-compatible capture record contains `provider`, `tsUtc`, `cwd`, and the complete `request` and `response` objects. The importer retains the canonical user message, final assistant content, model, and tool names. Provider reasoning fields and tool arguments are validated but not stored.
+
+## Canonical Sessions
+
+`onmhj sessions` reads Codex and Claude transcripts incrementally. Each canonical `AISessionTurn` has a stable `sourceId`, so a completed turn replaces its pending form and duplicate hook previews for that session are excluded. `full` stores redacted canonical prompts and answers, `preview` stores their first 300 characters, and `off` stores metadata only.
+
+File cursors live under `~/.local/state/onmhj/session-ingest/`. A malformed relevant record stops at its byte offset and creates a metadata-only quarantine entry. Final report generation for the affected date remains blocked until a successful retry clears it.
+
 Git-history backfills must include only commits authored or committed by the configured owner identity.
 
 Custom backfill jobs must start from the latest report repo state. Run `git pull --rebase --autostash` in the report repo before writing `raw/`, `daily/`, `reports/`, or `state/`.
@@ -116,6 +125,7 @@ Local machine:
 - report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
 - local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
 - worker log: `~/.local/state/onmhj/worker.log`
+- transcript cursors and quarantine: `~/.local/state/onmhj/session-ingest/`
 
 Report repo:
 
@@ -134,6 +144,7 @@ A date is confirmed only after its final report passes validation and raw, daily
 - Git sync and push run only during `flush` or worker-driven report jobs.
 - `flush`/worker pulls before writing; direct report-repo edits and custom backfills must do the same manually.
 - Prompt capture defaults to `preview`; use `full` or `off` as needed.
+- Final-report regeneration must preserve every prior non-heading report line; destructive output is rejected before the report or confirmation is written.
 - Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
 - Native agent reports run non-interactively in an isolated temporary directory with a bounded timeout. Codex ignores user configuration and rules and runs in a read-only sandbox with report-irrelevant tools disabled. Claude Code runs in safe mode with customizations, tools, browser integration, and session persistence disabled. Evidence is treated as untrusted data.
 - Automatic publication refuses to run when the report repository already has staged changes and uses a repository-wide publication lock.

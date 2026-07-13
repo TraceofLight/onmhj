@@ -1576,6 +1576,15 @@ async function selftest() {
   run('git', ['config', 'user.email', 'onmhj@example.local'], repo);
   run('git', ['config', 'user.name', 'onmhj'], repo);
   writeJson(CONFIG_PATH, { repoPath: repo, stateDir: state, promptMode: 'preview', timeZone: 'Asia/Seoul', reportLanguage: 'ko' });
+  const transcript = path.join(tmp, 'codex-session.jsonl');
+  fs.writeFileSync(transcript, [
+    { timestamp: '2026-07-09T01:00:00.000Z', type: 'session_meta', payload: { session_id: 'selftest-session', cwd: repo } },
+    { timestamp: '2026-07-09T01:00:01.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'selftest-turn' } },
+    { timestamp: '2026-07-09T01:00:02.000Z', type: 'event_msg', payload: { type: 'user_message', message: 'canonical selftest task' } },
+    { timestamp: '2026-07-09T01:00:03.000Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: 'selftest-turn', last_agent_message: 'canonical selftest answer' } },
+  ].map(JSON.stringify).join('\n') + '\n');
+  const ingested = await ingestSessionFiles(config(), [{ provider: 'codex', path: transcript }]);
+  if (ingested.changed !== 1 || ingested.failures !== 0) throw new Error('session ingestion failed');
   const existingRaw = path.join(repo, 'raw', 'ai-sessions', '2026-07-09.jsonl');
   fs.mkdirSync(path.dirname(existingRaw), { recursive: true });
   fs.writeFileSync(existingRaw, JSON.stringify({
@@ -1618,6 +1627,7 @@ async function selftest() {
   const raw = fs.readFileSync(path.join(repo, 'raw', 'ai-sessions', '2026-07-09.jsonl'), 'utf8');
   if (!daily) throw new Error('daily file missing');
   if (!daily.includes('## 장치')) throw new Error('localized device summary missing');
+  if (!daily.includes('canonical selftest answer')) throw new Error('assistant evidence missing');
   if (!raw.includes('"deviceId":"other-device"')) throw new Error('existing raw event was not preserved');
   if (daily.includes('redaction-fixture-value') || raw.includes('redaction-fixture-value')) {
     throw new Error('secret redaction failed');

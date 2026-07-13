@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.14 - 2026-07-13
+
+- Added deterministic Codex, Claude, and OpenAI-compatible session-turn normalization with final assistant evidence.
+- Added incremental transcript cursors, metadata-only quarantine, retry, and affected-date confirmation blocking.
+- Prevented final-report regeneration from removing prior report content.
+
 ## 0.1.13 - 2026-07-12
 
 - Added final report generation through the active local Claude Code login.

@@ -78,7 +78,8 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj flush [date]` | event 병합과 raw/daily 근거 발행. 날짜 확정 안 함 |
 | `onmhj ejmhj [date]` | 어제 또는 지정 작업일의 raw/daily/최종보고서 발행 |
 | `onmhj inject --text=...` | 수동 이벤트 1건 추가 |
-| `onmhj import <events.jsonl>` | 정규화된 JSONL bulk import |
+| `onmhj import <events.jsonl>` | 정규화 event 또는 OpenAI-compatible request/response capture import |
+| `onmhj sessions` | 알려진 Codex·Claude transcript JSONL 증분 수집 |
 | `onmhj worker` | pending report job 처리 |
 
 plugin command는 같은 CLI로 위임한다. Codex는 `/onmhj ...`, `/ejmhj [date]`를 사용하고 Claude Code는 `/onmhj:onmhj ...`, `/onmhj:ejmhj [date]`를 사용한다.
@@ -102,6 +103,14 @@ Bulk import:
 node bin/onmhj.js import /tmp/onmhj-backfill.jsonl
 ```
 
+OpenAI-compatible capture record는 `provider`, `tsUtc`, `cwd`, 전체 `request`와 `response` object를 포함한다. importer는 canonical user message, 최종 assistant content, model, tool name만 유지한다. provider reasoning field와 tool argument는 검증하지만 저장하지 않는다.
+
+## Canonical Session
+
+`onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 `AISessionTurn`은 안정적인 `sourceId`를 사용하므로 completed turn이 pending turn을 교체하고, 같은 session의 중복 hook preview는 제외한다. `full`은 redaction한 canonical prompt와 answer 전체, `preview`는 각각 앞 300자, `off`는 metadata만 저장한다.
+
+파일 cursor는 `~/.local/state/onmhj/session-ingest/`에 있다. 관련 record 파싱이 실패하면 해당 byte offset에서 멈추고 metadata-only quarantine을 남긴다. 정상 재시도로 quarantine이 해소될 때까지 영향받은 날짜의 최종보고서 확정을 차단한다.
+
 git-history 백필은 설정된 owner identity가 author 또는 committer인 커밋만 포함해야 한다.
 
 custom backfill은 최신 report repo 상태에서 시작해야 한다. `raw/`, `daily/`, `reports/`, `state/`를 쓰기 전에 report repo에서 `git pull --rebase --autostash`를 실행한다.
@@ -116,6 +125,7 @@ Local machine:
 - report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
 - local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
 - worker log: `~/.local/state/onmhj/worker.log`
+- transcript cursor와 quarantine: `~/.local/state/onmhj/session-ingest/`
 
 Report repo:
 
@@ -134,6 +144,7 @@ Report repo:
 - git sync/push는 `flush` 또는 worker 기반 report job에서만 실행한다.
 - `flush`/worker는 쓰기 전에 pull한다. 직접 report repo를 수정하거나 custom backfill을 실행하면 동일한 pull을 수동으로 먼저 해야 한다.
 - prompt capture 기본값은 `preview`다. 필요하면 `full` 또는 `off`를 쓴다.
+- 최종보고서 재생성은 기존 report의 모든 비제목 줄을 보존해야 하며, 파괴적인 출력은 report 또는 confirmation을 쓰기 전에 거부한다.
 - prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
 - native agent report는 격리된 임시 디렉터리에서 timeout을 두고 non-interactive로 실행한다. Codex는 user config와 rule을 무시하고 read-only sandbox에서 불필요한 tool을 비활성화한다. Claude Code는 safe mode에서 customization, tool, browser integration, session persistence를 비활성화한다. evidence는 신뢰할 수 없는 데이터로 취급한다.
 - report repo에 이미 staged change가 있으면 자동 발행을 거부하며 repo 전체 publication lock을 사용한다.
