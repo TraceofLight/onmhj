@@ -11,6 +11,7 @@ AI-session worklog capture for Codex and Claude Code.
 - Local-first hooks: session events append to local JSONL, not directly to git.
 - Git-backed history: `flush` writes raw JSONL and deterministic daily Markdown into a separate report repo.
 - Automatic final reports: report jobs turn daily evidence into `reports/YYYY-MM-DD.md` through the plugin runtime's local Claude Code or Codex login, or an OpenAI-compatible API.
+- External references: public links and DOI values cited in final assistant answers are stored separately and carried into daily evidence and final reports.
 - Multi-device safe: each computer has a `deviceId`; existing raw logs are pulled, merged, and deduped.
 - Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.
 - Agent auth by default: the Claude plugin uses the local Claude Code login; the Codex plugin and standalone CLI use the local Codex login. API mode is shared.
@@ -109,6 +110,8 @@ An OpenAI-compatible capture record contains `provider`, `tsUtc`, `cwd`, and the
 
 `onmhj sessions` reads Codex and Claude transcripts incrementally. Each canonical `AISessionTurn` contains a real user request and its final answer when available; known tool results, skill injections, notifications, commands, and compaction records remain only in the original transcript. Canonical user prompts and final answers are stored completely after redaction.
 
+Public Markdown links, bare HTTP(S) URLs, and DOI values cited in a final assistant answer are normalized into the turn's `references` array. Local files, localhost, private-network addresses, local-only hostnames, credentialed URLs, and URLs with sensitive authentication query parameters are excluded. Tracking parameters and fragments are removed. Daily evidence lists the collected references, and a final report with references must include one last `References` or `참고 자료` section using only those URLs. Tool records and browsing history are not scanned.
+
 Set `onmhj config --auto-report=false` to stop `SessionStart` from scheduling report jobs. `onmhj sessions --publish` then pulls the registered repo, blocks on any unresolved quarantine entry, replaces successfully replayed current-device session scopes in `raw/ai-sessions`, and creates one commit and push without changing `daily/`, `reports/`, report jobs, or confirmations. Other devices, sessions, and event types are preserved.
 
 File cursors live under `~/.local/state/onmhj/session-ingest/`. A parser-version replay replaces prior canonical output only after that transcript parses successfully. A malformed relevant record stops at its byte offset and creates a metadata-only quarantine entry; an unsuccessful replay keeps the previous canonical set and remains replayable from the start.
@@ -146,6 +149,7 @@ A date is confirmed only after its final report passes validation and raw, daily
 - Git sync and push run only during `sessions --publish`, `flush`, or worker-driven report jobs.
 - `flush`/worker pulls before writing; direct report-repo edits and custom backfills must do the same manually.
 - Canonical prompts and final answers are captured completely; reasoning and tool arguments are not persisted.
+- Reference capture uses only public URLs cited in final assistant answers; it does not retain page bodies, local resources, or browsing-tool history.
 - Final-report regeneration must preserve every prior non-heading report line; destructive output is rejected before the report or confirmation is written.
 - Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
 - Native agent reports run non-interactively in an isolated temporary directory with a bounded timeout. Codex ignores user configuration and rules and runs in a read-only sandbox with report-irrelevant tools disabled. Claude Code runs in safe mode with customizations, tools, browser integration, and session persistence disabled. Evidence is treated as untrusted data.

@@ -62,6 +62,10 @@ function validReportFor(reportDate) {
 `;
 }
 
+function reportWithReferences(reference = 'https://example.com/article') {
+  return validReport() + `\n## 참고 자료\n\n- [외부 자료](${reference})\n`;
+}
+
 function createRuntime() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-report-'));
   const repoPath = path.join(tmp, 'repo');
@@ -116,6 +120,45 @@ test('report prompt includes prior content with a verbatim preservation rule', (
 
   assert.match(prompt, /기존 고유 내용/);
   assert.match(prompt, /그대로 보존/);
+});
+
+test('report prompt requires collected references without inventing new URLs', () => {
+  const raw = JSON.stringify({
+    event: 'AISessionTurn',
+    references: [{ title: '외부 자료', url: 'https://example.com/article' }],
+  }) + '\n';
+  const prompt = onmhj.buildReportPrompt(date, 'daily', raw);
+
+  assert.match(prompt, /## 참고 자료/);
+  assert.match(prompt, /https:\/\/example\.com\/article/);
+  assert.match(prompt, /제공된 URL만/);
+});
+
+test('validates the optional reference section against collected evidence', () => {
+  const references = [{ title: '외부 자료', url: 'https://example.com/article' }];
+
+  assert.equal(
+    onmhj.validateReport(reportWithReferences(), date, 'ko', '', references),
+    reportWithReferences(),
+  );
+  assert.throws(
+    () => onmhj.validateReport(validReport(), date, 'ko', '', references),
+    /reference section/,
+  );
+  assert.throws(
+    () => onmhj.validateReport(
+      reportWithReferences('https://example.com/invented'),
+      date,
+      'ko',
+      '',
+      references,
+    ),
+    /unsupported reference/,
+  );
+  assert.throws(
+    () => onmhj.validateReport(reportWithReferences(), date),
+    /unsupported reference section/,
+  );
 });
 
 test('accepts a report with the exact work-date heading and required sections', () => {
@@ -478,6 +521,42 @@ test('daily evidence includes the canonical final assistant response', async () 
   const daily = fs.readFileSync(path.join(cfg.repoPath, 'daily', `${date}.md`), 'utf8');
   assert.match(daily, /AI 응답/);
   assert.match(daily, /canonical final answer/);
+});
+
+test('full pipeline adds collected references to daily evidence and the report prompt', async () => {
+  const cfg = createRuntime();
+  fs.appendFileSync(path.join(cfg.stateDir, 'events', `${date}.jsonl`), JSON.stringify({
+    event: 'AISessionTurn',
+    source: 'codex-transcript',
+    sourceId: 'codex:session:reference-turn',
+    provider: 'codex',
+    sessionId: 'session',
+    turnId: 'reference-turn',
+    tsUtc: `${date}T02:00:00.000Z`,
+    localDate: date,
+    timeZone: 'Asia/Seoul',
+    deviceId: 'test-device',
+    cwd: cfg.repoPath,
+    prompt: '관련 자료를 확인해줘',
+    assistantResponse: '확인한 자료는 [외부 자료](https://example.com/article)다.',
+    status: 'complete',
+  }) + '\n');
+  let prompt = '';
+
+  await onmhj.runFullReport(cfg, date, {
+    noPush: true,
+    generateReport: async (_cfg, _date, _daily, raw) => {
+      prompt = onmhj.buildReportPrompt(date, _daily, raw);
+      return reportWithReferences();
+    },
+  });
+
+  const daily = fs.readFileSync(path.join(cfg.repoPath, 'daily', `${date}.md`), 'utf8');
+  const raw = fs.readFileSync(path.join(cfg.repoPath, 'raw', 'ai-sessions', `${date}.jsonl`), 'utf8');
+  assert.match(daily, /## 참고 자료/);
+  assert.match(daily, /\[외부 자료\]\(https:\/\/example\.com\/article\)/);
+  assert.match(raw, /"references"/);
+  assert.match(prompt, /## 참고 자료/);
 });
 
 test('full pipeline leaves an existing report untouched when regenerated content is destructive', async () => {

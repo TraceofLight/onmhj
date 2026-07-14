@@ -165,6 +165,8 @@ node /path/to/onmhj/bin/onmhj.js sessions
 
 The first scan records per-file byte cursors under `~/.local/state/onmhj/session-ingest/`. Parser failures create metadata-only quarantine entries and block final-report confirmation for the affected date until the same command retries successfully. OpenAI-compatible clients or proxies can instead import JSONL records containing `provider`, `tsUtc`, `cwd`, `request`, and `response`.
 
+Parser version 6 extracts public Markdown links, HTTP(S) URLs, and DOI values from final assistant answers into `AISessionTurn.references`. It excludes local files, localhost, private-network and local-only hosts, credentialed URLs, and URLs containing sensitive authentication query parameters. It does not inspect tool results or browsing history. Daily evidence lists every collected reference; final reports include a last `References` or `참고 자료` section only when references exist and may use only the supplied URLs.
+
 Imported events go to `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`; run `flush YYYY-MM-DD` to write the report repo.
 
 When importing git history, prefilter commits to the configured owner identity. Include only commits where author or committer matches the configured owner name or email. This prevents team repo history from being reported as the user's own work.
@@ -174,6 +176,8 @@ Each imported event gets the configured `deviceId` unless the JSONL already incl
 ## Privacy
 
 `onmhj` stores complete canonical user prompts and final assistant answers after redacting common token, password, secret, API key, bearer token, and private-key patterns. Reasoning fields and tool arguments from compatible API captures are never persisted.
+
+Reference capture stores normalized titles and public URLs only. Page bodies, local resources, browsing-tool history, URL credentials, and sensitive signed-query URLs are not persisted.
 
 Redaction is a best-effort guard, not a full secret scanner. Do not include credentials in prompts.
 

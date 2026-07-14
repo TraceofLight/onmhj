@@ -118,6 +118,29 @@ test('assistant responses are redacted during merge', () => {
   assert.match(event.assistantResponse, /\[REDACTED\]/);
 });
 
+test('collects only public references from final assistant responses', () => {
+  const [event] = onmhj.mergeEvents([{
+    event: 'AISessionTurn',
+    sourceId: 'turn:references',
+    tsUtc: '2026-07-13T00:00:00.000Z',
+    assistantResponse: [
+      '공식 문서는 [OpenAI docs](https://platform.openai.com/docs/?utm_source=test#intro)에서 확인했다.',
+      '중복 링크 https://platform.openai.com/docs/ 와 논문 DOI: 10.1000/xyz123을 참고했다.',
+      '내부 자료 http://localhost:3000/run, http://192.168.0.2/wiki, https://notes.local/page는 제외한다.',
+      'IPv6 내부 자료 [loopback](https://[::1]/wiki)도 제외한다.',
+      '서명 URL https://example.com/private?token=secret-value도 제외한다.',
+    ].join('\n'),
+  }]);
+
+  assert.deepEqual(event.references, [{
+    title: 'OpenAI docs',
+    url: 'https://platform.openai.com/docs/',
+  }, {
+    title: '',
+    url: 'https://doi.org/10.1000/xyz123',
+  }]);
+});
+
 test('session ingestion advances its cursor once and does not duplicate events', async () => {
   const stateDir = tempDir();
   const transcript = path.join(stateDir, 'codex.jsonl');
@@ -218,7 +241,7 @@ test('a parser version change restarts stale cursor state', async () => {
 
   assert.deepEqual(result, { changed: 0, failures: 0 });
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
-  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 5);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 6);
 });
 
 test('a successful parser replay replaces stale local turns in its session scope', async () => {
@@ -316,7 +339,7 @@ test('a successful parser replay replaces stale local turns in its session scope
   assert.ok(stagedModes.every(mode => mode === 0o600));
   assert.ok(replayLocks.length > 0);
   assert.ok(replayLocks.every(Boolean));
-  assert.equal(cursor.parserVersion, 5);
+  assert.equal(cursor.parserVersion, 6);
   assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
 });
 
@@ -803,11 +826,11 @@ test('raw session publish reconciles current-device sessions without touching un
   const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
   fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
   fs.writeFileSync(cursorFile, JSON.stringify({
-    version: 5,
+    version: 6,
     files: {
       'claude-transcript.jsonl': {
         provider: 'claude',
-        parserVersion: 5,
+        parserVersion: 6,
         sessionIds: ['reconciled-session'],
       },
     },

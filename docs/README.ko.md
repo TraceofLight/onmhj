@@ -11,6 +11,7 @@ Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 - local-first hook: 세션 이벤트는 git에 바로 쓰지 않고 local JSONL에 append한다.
 - git-backed history: `flush`가 별도 report repo에 raw JSONL과 기계적으로 정리한 daily Markdown을 쓴다.
 - automatic final reports: report job이 plugin runtime에 맞는 로컬 Claude Code 또는 Codex 로그인이나 OpenAI 호환 API를 통해 `reports/YYYY-MM-DD.md` 최종보고서를 만든다.
+- external references: 최종 assistant 답변이 인용한 공개 링크와 DOI를 별도로 저장해 daily evidence와 최종보고서에 반영한다.
 - multi-device safe: 컴퓨터마다 `deviceId`를 두고, 기존 raw 로그를 pull/merge/dedupe한다.
 - automatic catch-up: background job이 확정되지 않은 날짜를 `confirmedThrough`가 전진할 때까지 재시도한다.
 - agent auth default: Claude plugin은 로컬 Claude Code 로그인을, Codex plugin과 standalone CLI는 로컬 Codex 로그인을 쓴다. API mode는 공용이다.
@@ -109,6 +110,8 @@ OpenAI-compatible capture record는 `provider`, `tsUtc`, `cwd`, 전체 `request`
 
 `onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 canonical `AISessionTurn`에는 실제 사용자 요청과 존재하는 경우 최종 답변만 포함한다. 알려진 tool result, skill injection, notification, command, compaction record는 원본 transcript에만 남긴다. Canonical user prompt와 최종 answer는 redaction 후 전체를 저장한다.
 
+최종 assistant 답변에 인용된 공개 Markdown 링크, HTTP(S) URL, DOI는 turn의 `references` 배열로 정규화한다. 로컬 파일, localhost, 사설망 주소, 로컬 전용 hostname, 인증정보가 포함된 URL과 민감한 인증 query parameter가 있는 URL은 제외하고 추적 parameter와 fragment는 제거한다. Daily evidence는 수집한 참고 자료를 모두 나열하며, reference가 있는 최종보고서는 마지막에 `참고 자료` 또는 `References` 섹션을 하나 두고 제공된 URL만 사용해야 한다. Tool record와 browsing history는 수집하지 않는다.
+
 `onmhj config --auto-report=false`를 설정하면 `SessionStart`가 report job을 예약하지 않는다. 이후 `onmhj sessions --publish`는 registered repo를 pull하고 unresolved quarantine이 없는지 확인한 뒤, 성공적으로 replay한 현재 기기의 session 범위만 `raw/ai-sessions`에서 교체해 커밋과 push를 각각 한 번만 수행한다. 다른 기기, 다른 session, 다른 event type과 `daily/`, `reports/`, report job, confirmation은 변경하지 않는다.
 
 파일 cursor는 `~/.local/state/onmhj/session-ingest/`에 있다. parser version replay는 transcript 전체 파싱이 성공한 뒤에만 이전 canonical 결과를 교체한다. 관련 record 파싱이 실패하면 해당 byte offset에서 멈추고 metadata-only quarantine을 남기며, 실패한 replay는 기존 canonical 집합과 처음부터 다시 시도할 수 있는 cursor를 유지한다.
@@ -146,6 +149,7 @@ Report repo:
 - git sync/push는 `sessions --publish`, `flush`, 또는 worker 기반 report job에서만 실행한다.
 - `flush`/worker는 쓰기 전에 pull한다. 직접 report repo를 수정하거나 custom backfill을 실행하면 동일한 pull을 수동으로 먼저 해야 한다.
 - Canonical prompt와 최종 answer는 전체를 수집하며 reasoning과 tool argument는 저장하지 않는다.
+- Reference는 최종 assistant 답변에 인용된 공개 URL만 수집하며 페이지 본문, 로컬 자료, browsing tool history는 저장하지 않는다.
 - 최종보고서 재생성은 기존 report의 모든 비제목 줄을 보존해야 하며, 파괴적인 출력은 report 또는 confirmation을 쓰기 전에 거부한다.
 - prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
 - native agent report는 격리된 임시 디렉터리에서 timeout을 두고 non-interactive로 실행한다. Codex는 user config와 rule을 무시하고 read-only sandbox에서 불필요한 tool을 비활성화한다. Claude Code는 safe mode에서 customization, tool, browser integration, session persistence를 비활성화한다. evidence는 신뢰할 수 없는 데이터로 취급한다.
