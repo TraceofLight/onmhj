@@ -1418,6 +1418,7 @@ function buildReportPrompt(date, daily, raw, language = 'ko', previousReport = '
     'Write `- No confirmed items` when a required task subsection has no confirmed content.',
     ...(references.length ? [
       `Add \`#### ${contract.references}\` only inside each related task and place every collected URL under a task using the reference provenance records.`,
+      `When a task has both optional sections, place \`#### ${contract.followUp}\` before \`#### ${contract.references}\`.`,
       'Do not create a global reference section. Use only provided URLs and do not invent references.',
     ] : []),
     ...(previousReport ? ['Preserve every non-heading line from the prior report verbatim; move those lines under the appropriate task without rewriting them.'] : []),
@@ -1434,6 +1435,7 @@ function buildReportPrompt(date, daily, raw, language = 'ko', previousReport = '
     '확인된 내용이 없는 필수 Task 하위 섹션에는 `- 확인된 내용 없음`을 작성하라.',
     ...(references.length ? [
       `reference provenance record를 따라 각 URL을 관련 Task 내부의 \`#### ${contract.references}\`에 배치하고 수집된 모든 URL을 포함하라.`,
+      `한 Task에 두 선택 섹션이 모두 있으면 \`#### ${contract.followUp}\` 뒤에 \`#### ${contract.references}\`를 작성하라.`,
       '전역 참고 자료 섹션은 만들지 말고 제공된 URL만 사용하며 참고 자료를 지어내지 마라.',
     ] : []),
     ...(previousReport ? ['기존 report의 모든 비제목 줄을 고쳐 쓰지 말고 적절한 Task 아래로 옮겨 그대로 보존하라.'] : []),
