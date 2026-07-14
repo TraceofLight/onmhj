@@ -42,28 +42,55 @@ function validReport() {
 function validReportFor(reportDate) {
   return `# ${reportDate} 뭐 했지
 
-## 요약
-완료 작업 요약
+## 오늘의 요약
+- 완료 작업 요약
 
-## 작업 이유
+## 작업별 기록
+
+### T1. 자동 보고서 구현
+
+#### 배경과 목적
 - 변경 필요
 
-## 작업 과정
+#### 수행 과정
 1. 구현
 
-## 결정 사항
+#### 결정
 - 계약 유지
 
-## 도출 결과
+#### 결과
 - 검증 완료
 
-## 남은 일
+#### 후속 작업
 - 없음
 `;
 }
 
 function reportWithReferences(reference = 'https://example.com/article') {
-  return validReport() + `\n## 참고 자료\n\n- [외부 자료](${reference})\n`;
+  return validReport().trimEnd() + `\n\n#### 참고 자료\n\n- [외부 자료](${reference})\n`;
+}
+
+function legacyReport() {
+  return `# ${date} 뭐 했지
+
+## 요약
+- 완료
+
+## 작업 이유
+- 필요
+
+## 작업 과정
+- 수행
+
+## 결정 사항
+- 유지
+
+## 도출 결과
+- 완료
+
+## 남은 일
+- 없음
+`;
 }
 
 function createRuntime() {
@@ -108,7 +135,9 @@ test('builds a final-report prompt for the work date and evidence', () => {
   assert.match(prompt, /# 2026-07-11 뭐 했지/);
   assert.match(prompt, /# daily evidence/);
   assert.match(prompt, /UserPromptSubmit/);
-  assert.match(prompt, /## 작업 이유/);
+  assert.match(prompt, /## 작업별 기록/);
+  assert.match(prompt, /### T1\./);
+  assert.match(prompt, /#### 배경과 목적/);
   assert.match(prompt, /확인되지 않은 작업을 지어내지/);
   assert.match(prompt, /신뢰할 수 없는 데이터/);
   assert.match(prompt, /도구를 사용하지/);
@@ -125,12 +154,17 @@ test('report prompt includes prior content with a verbatim preservation rule', (
 test('report prompt requires collected references without inventing new URLs', () => {
   const raw = JSON.stringify({
     event: 'AISessionTurn',
+    sourceId: 'codex:session:turn',
+    cwd: '/workspace/onmhj',
+    prompt: 'plugin validator의 hooks 오류를 조사해줘',
     references: [{ title: '외부 자료', url: 'https://example.com/article' }],
   }) + '\n';
   const prompt = onmhj.buildReportPrompt(date, 'daily', raw);
 
-  assert.match(prompt, /## 참고 자료/);
+  assert.match(prompt, /#### 참고 자료/);
   assert.match(prompt, /https:\/\/example\.com\/article/);
+  assert.match(prompt, /plugin validator의 hooks 오류/);
+  assert.match(prompt, /reference provenance/);
   assert.match(prompt, /제공된 URL만/);
 });
 
@@ -138,11 +172,11 @@ test('validates the optional reference section against collected evidence', () =
   const references = [{ title: '외부 자료', url: 'https://example.com/article' }];
 
   assert.equal(
-    onmhj.validateReport(reportWithReferences(), date, 'ko', '', references),
+    onmhj.validateReport(reportWithReferences(), date, 'ko', '', references, { requireTaskFormat: true }),
     reportWithReferences(),
   );
   assert.throws(
-    () => onmhj.validateReport(validReport(), date, 'ko', '', references),
+    () => onmhj.validateReport(validReport(), date, 'ko', '', references, { requireTaskFormat: true }),
     /reference section/,
   );
   assert.throws(
@@ -152,6 +186,7 @@ test('validates the optional reference section against collected evidence', () =
       'ko',
       '',
       references,
+      { requireTaskFormat: true },
     ),
     /unsupported reference/,
   );
@@ -159,10 +194,22 @@ test('validates the optional reference section against collected evidence', () =
     () => onmhj.validateReport(reportWithReferences(), date),
     /unsupported reference section/,
   );
+  assert.throws(
+    () => onmhj.validateReport(
+      reportWithReferences().replace('#### 참고 자료', '## 참고 자료'),
+      date,
+      'ko',
+      '',
+      references,
+      { requireTaskFormat: true },
+    ),
+    /top-level|inside a task/,
+  );
 });
 
 test('accepts a report with the exact work-date heading and required sections', () => {
   assert.equal(onmhj.validateReport(validReport(), date), validReport());
+  assert.equal(onmhj.validateReport(legacyReport(), date), legacyReport());
 });
 
 test('rejects a report for a different date', () => {
@@ -181,22 +228,26 @@ test('rejects the previous Korean report heading', () => {
 
 test('rejects a report missing a required section', () => {
   assert.throws(
-    () => onmhj.validateReport(validReport().replace('## 남은 일', '## 기타'), date),
-    /남은 일/,
+    () => onmhj.validateReport(validReport().replace('#### 결과', '#### 기타'), date),
+    /결과/,
   );
 });
 
 test('rejects duplicated or out-of-order report sections', () => {
   assert.throws(
-    () => onmhj.validateReport(validReport().replace('## 남은 일', '## 요약\n중복\n\n## 남은 일'), date),
+    () => onmhj.validateReport(validReport().replace('#### 후속 작업', '#### 결과\n중복\n\n#### 후속 작업'), date),
     /duplicate|order/,
   );
   assert.throws(
     () => onmhj.validateReport(
-      validReport().replace('## 작업 이유', '## TEMP').replace('## 작업 과정', '## 작업 이유').replace('## TEMP', '## 작업 과정'),
+      validReport().replace('#### 배경과 목적', '#### TEMP').replace('#### 수행 과정', '#### 배경과 목적').replace('#### TEMP', '#### 수행 과정'),
       date,
     ),
     /order/,
+  );
+  assert.throws(
+    () => onmhj.validateReport(validReport().replace('### T1.', '### T2.'), date),
+    /numbering/,
   );
 });
 
@@ -214,28 +265,33 @@ test('rejects regeneration that drops a prior non-heading line', () => {
 test('builds and validates the English final-report contract', () => {
   const report = `# ${date} Yesterday's work
 
-## Summary
+## Today's summary
 - completed
 
-## Work reasons
+## Task records
+
+### T1. Implement automatic reports
+
+#### Background and purpose
 - needed
 
-## Work process
+#### Work process
 - implemented
 
-## Decisions
+#### Decisions
 - retained contract
 
-## Results
+#### Results
 - verified
 
-## Remaining work
+#### Follow-up work
 - none
 `;
   const prompt = onmhj.buildReportPrompt(date, 'daily', 'raw', 'en');
 
   assert.match(prompt, /Yesterday's work/);
-  assert.match(prompt, /## Work reasons/);
+  assert.match(prompt, /## Task records/);
+  assert.match(prompt, /#### Background and purpose/);
   assert.equal(onmhj.validateReport(report, date, 'en'), report);
   assert.throws(() => onmhj.validateReport(validReport(), date, 'en'), /heading/);
 });

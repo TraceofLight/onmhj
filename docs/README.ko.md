@@ -110,7 +110,7 @@ OpenAI-compatible capture record는 `provider`, `tsUtc`, `cwd`, 전체 `request`
 
 `onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 canonical `AISessionTurn`에는 실제 사용자 요청과 존재하는 경우 최종 답변만 포함한다. 알려진 tool result, skill injection, notification, command, compaction record는 원본 transcript에만 남긴다. Canonical user prompt와 최종 answer는 redaction 후 전체를 저장한다.
 
-최종 assistant 답변에 인용된 공개 Markdown 링크, HTTP(S) URL, DOI는 turn의 `references` 배열로 정규화한다. 로컬 파일, localhost, 사설망 주소, 로컬 전용 hostname, 인증정보가 포함된 URL과 민감한 인증 query parameter가 있는 URL은 제외하고 추적 parameter와 fragment는 제거한다. Daily evidence는 수집한 참고 자료를 모두 나열하며, reference가 있는 최종보고서는 마지막에 `참고 자료` 또는 `References` 섹션을 하나 두고 제공된 URL만 사용해야 한다. Tool record와 browsing history는 수집하지 않는다.
+최종 assistant 답변에 인용된 공개 Markdown 링크, HTTP(S) URL, DOI는 turn의 `references` 배열로 정규화한다. 로컬 파일, localhost, 사설망 주소, 로컬 전용 hostname, 인증정보가 포함된 URL과 민감한 인증 query parameter가 있는 URL은 제외하고 추적 parameter와 fragment는 제거한다. Daily evidence는 수집한 참고 자료를 모두 나열한다. 새 최종보고서는 작업을 번호가 있는 Task로 묶고 배경·과정·결정·결과를 Task 안에 작성하며, 각 reference는 관련 Task의 `참고 자료` 또는 `References` 하위 섹션에만 배치한다. Tool record와 browsing history는 수집하지 않는다.
 
 `onmhj config --auto-report=false`를 설정하면 `SessionStart`가 report job을 예약하지 않는다. 이후 `onmhj sessions --publish`는 registered repo를 pull하고 unresolved quarantine이 없는지 확인한 뒤, 성공적으로 replay한 현재 기기의 session 범위만 `raw/ai-sessions`에서 교체해 커밋과 push를 각각 한 번만 수행한다. 다른 기기, 다른 session, 다른 event type과 `daily/`, `reports/`, report job, confirmation은 변경하지 않는다.
 

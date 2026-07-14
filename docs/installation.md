@@ -165,7 +165,7 @@ node /path/to/onmhj/bin/onmhj.js sessions
 
 The first scan records per-file byte cursors under `~/.local/state/onmhj/session-ingest/`. Parser failures create metadata-only quarantine entries and block final-report confirmation for the affected date until the same command retries successfully. OpenAI-compatible clients or proxies can instead import JSONL records containing `provider`, `tsUtc`, `cwd`, `request`, and `response`.
 
-Parser version 6 extracts public Markdown links, HTTP(S) URLs, and DOI values from final assistant answers into `AISessionTurn.references`. It excludes local files, localhost, private-network and local-only hosts, credentialed URLs, and URLs containing sensitive authentication query parameters. It does not inspect tool results or browsing history. Daily evidence lists every collected reference; final reports include a last `References` or `참고 자료` section only when references exist and may use only the supplied URLs.
+Parser version 6 extracts public Markdown links, HTTP(S) URLs, and DOI values from final assistant answers into `AISessionTurn.references`. It excludes local files, localhost, private-network and local-only hosts, credentialed URLs, and URLs containing sensitive authentication query parameters. It does not inspect tool results or browsing history. Daily evidence lists every collected reference. Newly generated reports use numbered task sections, preserve the reference-to-turn provenance, and place supplied URLs only under the related task's `References` or `참고 자료` subsection. Existing legacy reports remain valid until explicitly regenerated.
 
 Imported events go to `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`; run `flush YYYY-MM-DD` to write the report repo.
 

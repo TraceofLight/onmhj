@@ -193,3 +193,58 @@ test('does not regenerate a valid confirmed report only because another device i
   assert.equal(queued, false);
   assert.equal(onmhj.readReportJob(onmhj.config(), '2026-07-09'), null);
 });
+
+test('does not requeue a confirmed legacy report with collected references', () => {
+  const cfg = createConfig();
+  appendEvent(cfg.stateDir, '2026-07-09', {
+    tsUtc: '2026-07-09T01:00:00.000Z',
+    localDate: '2026-07-09',
+    event: 'UserPromptSubmit',
+    deviceId: cfg.deviceId,
+  });
+  writeJson(path.join(cfg.stateDir, 'jobs', 'reports', 'confirmed.json'), {
+    deviceId: cfg.deviceId,
+    confirmedThrough: '2026-07-09',
+  });
+  const rawDir = path.join(cfg.repoPath, 'raw', 'ai-sessions');
+  fs.mkdirSync(rawDir, { recursive: true });
+  fs.writeFileSync(path.join(rawDir, '2026-07-09.jsonl'), JSON.stringify({
+    event: 'AISessionTurn',
+    references: [{ title: '외부 자료', url: 'https://example.com/article' }],
+  }) + '\n');
+  const reportDir = path.join(cfg.repoPath, 'reports');
+  fs.mkdirSync(reportDir, { recursive: true });
+  fs.writeFileSync(path.join(reportDir, '2026-07-09.md'), `# 2026-07-09 뭐 했지
+
+## 요약
+- 완료
+
+## 작업 이유
+- 필요
+
+## 작업 과정
+- 수행
+
+## 결정 사항
+- 유지
+
+## 도출 결과
+- 완료
+
+## 남은 일
+- 없음
+
+## 참고 자료
+- [외부 자료](https://example.com/article)
+`);
+
+  onmhj.setConfigPath(cfg.configPath);
+  const queued = onmhj.tryScheduleReportJobs(
+    onmhj.config(),
+    new Date('2026-07-10T01:00:00.000Z'),
+    { spawn: false },
+  );
+
+  assert.equal(queued, false);
+  assert.equal(onmhj.readReportJob(onmhj.config(), '2026-07-09'), null);
+});
