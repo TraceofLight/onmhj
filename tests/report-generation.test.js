@@ -167,6 +167,7 @@ test('report prompt requires collected references without inventing new URLs', (
   assert.match(prompt, /reference provenance/);
   assert.match(prompt, /제공된 URL만/);
   assert.match(prompt, /#### 후속 작업.*#### 참고 자료/);
+  assert.match(prompt, /URL.*#### 참고 자료.*밖.*작성하지/);
 });
 
 test('validates the optional reference section against collected evidence', () => {
