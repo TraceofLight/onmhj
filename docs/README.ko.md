@@ -9,9 +9,10 @@ Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 ## 왜 쓰나
 
 - local-first hook: 세션 이벤트는 git에 바로 쓰지 않고 local JSONL에 append한다.
-- git-backed history: `flush`가 별도 report repo에 raw JSONL과 기계적으로 정리한 daily Markdown을 쓴다.
+- git-backed history: `flush`가 별도 report repo에 canonical raw JSONL을 쓴다.
 - automatic final reports: report job이 plugin runtime에 맞는 로컬 Claude Code 또는 Codex 로그인이나 OpenAI 호환 API를 통해 `reports/YYYY-MM-DD.md` 최종보고서를 만든다.
-- external references: 최종 assistant 답변이 인용한 공개 링크와 DOI를 별도로 저장해 daily evidence와 최종보고서에 반영한다.
+- chunked generation: 큰 작업일은 세션을 보존한 약 20 KiB 청크로 나누고 최대 3개 격리 agent가 병렬 요약한 뒤 하나의 검증된 report로 병합한다.
+- external references: 최종 assistant 답변이 인용한 공개 링크와 DOI를 raw evidence에 저장해 최종보고서에 반영한다.
 - multi-device safe: 컴퓨터마다 `deviceId`를 두고, 기존 raw 로그를 pull/merge/dedupe한다.
 - automatic catch-up: background job이 확정되지 않은 날짜를 `confirmedThrough`가 전진할 때까지 재시도한다.
 - agent auth default: Claude plugin은 로컬 Claude Code 로그인을, Codex plugin과 standalone CLI는 로컬 Codex 로그인을 쓴다. API mode는 공용이다.
@@ -76,8 +77,8 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj register <repo>` | 외부 report repo 설정 |
 | `onmhj config ...` | timezone, device id, owner, 자동 report, language, auth, API 설정 변경 |
 | `onmhj status` | config, local event 수, confirmed floor, job 수 확인 |
-| `onmhj flush [date]` | event 병합과 raw/daily 근거 발행. 날짜 확정 안 함 |
-| `onmhj ejmhj [date]` | 어제 또는 지정 작업일의 raw/daily/최종보고서 발행 |
+| `onmhj flush [date]` | event 병합과 raw 근거 발행. 날짜 확정 안 함 |
+| `onmhj ejmhj [date]` | 어제 또는 지정 작업일의 raw 근거와 최종보고서 발행 |
 | `onmhj inject --text=...` | 수동 이벤트 1건 추가 |
 | `onmhj import <events.jsonl>` | 정규화 event 또는 OpenAI-compatible request/response capture import |
 | `onmhj sessions [--publish]` | Codex·Claude transcript 증분 수집 및 선택적 raw-only 단일 커밋 발행 |
@@ -110,15 +111,15 @@ OpenAI-compatible capture record는 `provider`, `tsUtc`, `cwd`, 전체 `request`
 
 `onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 canonical `AISessionTurn`에는 실제 사용자 요청과 존재하는 경우 최종 답변만 포함한다. 알려진 tool result, skill injection, notification, command, compaction record는 원본 transcript에만 남긴다. Canonical user prompt와 최종 answer는 redaction 후 전체를 저장한다.
 
-최종 assistant 답변에 인용된 공개 Markdown 링크, HTTP(S) URL, DOI는 turn의 `references` 배열로 정규화한다. 로컬 파일, localhost, 사설망 주소, 로컬 전용 hostname, 인증정보가 포함된 URL과 민감한 인증 query parameter가 있는 URL은 제외하고 추적 parameter와 fragment는 제거한다. Daily evidence는 수집한 참고 자료를 모두 나열한다. 새 최종보고서는 작업을 번호가 있는 Task로 묶고 배경·과정·결정·결과를 Task 안에 작성하며, 각 reference는 관련 Task의 `참고 자료` 또는 `References` 하위 섹션에만 배치한다. Tool record와 browsing history는 수집하지 않는다.
+최종 assistant 답변에 인용된 공개 Markdown 링크, HTTP(S) URL, DOI는 turn의 `references` 배열로 정규화한다. 로컬 파일, localhost, 사설망 주소, 로컬 전용 hostname, 인증정보가 포함된 URL과 민감한 인증 query parameter가 있는 URL은 제외하고 추적 parameter와 fragment는 제거한다. 새 최종보고서는 작업을 번호가 있는 Task로 묶고 배경·과정·결정·결과를 Task 안에 작성하며, 각 reference는 관련 Task의 `참고 자료` 또는 `References` 하위 섹션에만 배치한다. Tool record와 browsing history는 수집하지 않는다.
 
-`onmhj config --auto-report=false`를 설정하면 `SessionStart`가 report job을 예약하지 않는다. 이후 `onmhj sessions --publish`는 registered repo를 pull하고 unresolved quarantine이 없는지 확인한 뒤, 성공적으로 replay한 현재 기기의 session 범위만 `raw/ai-sessions`에서 교체해 커밋과 push를 각각 한 번만 수행한다. 다른 기기, 다른 session, 다른 event type과 `daily/`, `reports/`, report job, confirmation은 변경하지 않는다.
+`onmhj config --auto-report=false`를 설정하면 `SessionStart`가 report job을 예약하지 않는다. 이후 `onmhj sessions --publish`는 registered repo를 pull하고 unresolved quarantine이 없는지 확인한 뒤, 성공적으로 replay한 현재 기기의 session 범위만 `raw/ai-sessions`에서 교체해 커밋과 push를 각각 한 번만 수행한다. 다른 기기, 다른 session, 다른 event type과 `reports/`, report job, confirmation은 변경하지 않는다.
 
 파일 cursor는 `~/.local/state/onmhj/session-ingest/`에 있다. parser version replay는 transcript 전체 파싱이 성공한 뒤에만 이전 canonical 결과를 교체한다. 관련 record 파싱이 실패하면 해당 byte offset에서 멈추고 metadata-only quarantine을 남기며, 실패한 replay는 기존 canonical 집합과 처음부터 다시 시도할 수 있는 cursor를 유지한다.
 
 git-history 백필은 설정된 owner identity가 author 또는 committer인 커밋만 포함해야 한다.
 
-custom backfill은 최신 report repo 상태에서 시작해야 한다. `raw/`, `daily/`, `reports/`, `state/`를 쓰기 전에 report repo에서 `git pull --rebase --autostash`를 실행한다.
+custom backfill은 최신 report repo 상태에서 시작해야 한다. `raw/`, `reports/`, `state/`를 쓰기 전에 report repo에서 `git pull --rebase --autostash`를 실행한다.
 
 ## Storage
 
@@ -128,6 +129,7 @@ Local machine:
 - events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`
 - internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl`
 - report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
+- 재시도 가능한 report part: `~/.local/state/onmhj/report-parts/YYYY-MM-DD/INPUT_HASH/`
 - local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
 - worker log: `~/.local/state/onmhj/worker.log`
 - transcript cursor와 quarantine: `~/.local/state/onmhj/session-ingest/`
@@ -135,13 +137,12 @@ Local machine:
 Report repo:
 
 - raw events: `raw/ai-sessions/YYYY-MM-DD.jsonl`
-- daily evidence: `daily/YYYY-MM-DD.md`
 - final report: `reports/YYYY-MM-DD.md`
 - device confirmations: `state/devices/DEVICE_ID.json`
 
-최종보고서 검증과 raw, daily, report, device confirmation 커밋이 모두 성공해야 날짜를 확정한다. 완료 상태였더라도 report가 없거나 형식이 잘못되면 자동으로 다시 queue한다.
+최종보고서 검증과 raw, report, device confirmation 커밋이 모두 성공해야 날짜를 확정한다. 완료 상태였더라도 report가 없거나 형식이 잘못되면 자동으로 다시 queue한다.
 
-`ejmhj --no-push`는 raw, daily, 최종보고서를 생성·커밋하지만 confirmation을 쓰지 않는다. `flush --no-push`는 raw와 daily 근거만 생성·커밋한다. 일반 `ejmhj`는 ordered job queue를 사용하므로 뒤 날짜가 앞선 retry를 건너뛰지 않고 confirmation도 역행하지 않는다.
+`ejmhj --no-push`는 raw와 최종보고서를 생성·커밋하지만 confirmation을 쓰지 않는다. `flush --no-push`는 raw 근거만 생성·커밋한다. 일반 `ejmhj`는 ordered job queue를 사용하므로 뒤 날짜가 앞선 retry를 건너뛰지 않고 confirmation도 역행하지 않는다.
 
 ## Safety
 
@@ -153,5 +154,6 @@ Report repo:
 - 최종보고서 재생성은 기존 report의 모든 비제목 줄을 보존해야 하며, 파괴적인 출력은 report 또는 confirmation을 쓰기 전에 거부한다.
 - prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
 - native agent report는 격리된 임시 디렉터리에서 timeout을 두고 non-interactive로 실행한다. Codex는 user config와 rule을 무시하고 read-only sandbox에서 불필요한 tool을 비활성화한다. Claude Code는 safe mode에서 customization, tool, browser integration, session persistence를 비활성화한다. evidence는 신뢰할 수 없는 데이터로 취급한다.
+- chunked report generation은 JSONL record나 AI turn 중간을 자르지 않는다. 각 child 호출에 개별 timeout을 적용하고 검증된 part는 retry에서 재사용한다.
 - report repo에 이미 staged change가 있으면 자동 발행을 거부하며 repo 전체 publication lock을 사용한다.
 - report local date는 설정 timezone 기준이고, event spool 파일명은 UTC 기준이다.

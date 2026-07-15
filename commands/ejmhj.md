@@ -11,4 +11,4 @@ Resolve the plugin root from `CODEX_PLUGIN_ROOT`, then `CLAUDE_PLUGIN_ROOT`, the
 node "$PLUGIN_ROOT/bin/onmhj.js" ejmhj $ARGUMENTS
 ```
 
-With no date, this publishes raw evidence, daily evidence, and the final report for yesterday in the configured timezone. The final report uses the work date. State before running that it commits and pushes the registered report repository unless `--no-push` was supplied.
+With no date, this publishes raw evidence and the final report for yesterday in the configured timezone. The final report uses the work date. State before running that it commits and pushes the registered report repository unless `--no-push` was supplied.

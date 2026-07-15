@@ -11,6 +11,8 @@ const {
   parseClaudeRecord,
   parseCodexRecord,
 } = require('./session-parsers');
+const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
+const { cleanupMapCache, mapRawEvidence, reduceMapSummaries } = require('./report-map-reduce');
 
 let CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
@@ -1398,15 +1400,9 @@ function rawReferenceEvidence(raw) {
   return evidence;
 }
 
-function formatReference(reference) {
-  return reference.title ? `[${reference.title}](${reference.url})` : reference.url;
-}
-
-function buildReportPrompt(date, daily, raw, language = 'ko', previousReport = '') {
+function reportInstructions(date, language, previousReport, references) {
   const contract = reportContract(language);
-  const references = rawReferences(raw);
-  const referenceEvidence = rawReferenceEvidence(raw);
-  const instructions = language === 'en' ? [
+  return language === 'en' ? [
     `Write the final Markdown report for work date ${date} in English.`,
     'Use only supplied evidence and do not invent unconfirmed work.',
     `The first line must be exactly \`# ${date} ${contract.title}\`.`,
@@ -1439,13 +1435,31 @@ function buildReportPrompt(date, daily, raw, language = 'ko', previousReport = '
     ...(previousReport ? ['기존 report의 모든 비제목 줄을 고쳐 쓰지 말고 적절한 Task 아래로 옮겨 그대로 보존하라.'] : []),
     'Markdown 본문만 출력하라.',
   ];
+}
+
+function buildReportPrompt(date, raw, language = 'ko', previousReport = '') {
+  const references = rawReferences(raw);
+  const referenceEvidence = rawReferenceEvidence(raw);
   return [
-    ...instructions,
-    '',
-    '--- daily evidence ---',
-    daily,
+    ...reportInstructions(date, language, previousReport, references),
     '--- normalized raw events ---',
     raw,
+    ...(referenceEvidence.length ? [
+      '--- external reference provenance (JSONL) ---',
+      ...referenceEvidence.map(item => JSON.stringify(item)),
+    ] : []),
+    ...(previousReport ? ['--- prior report to preserve ---', previousReport] : []),
+  ].join('\n');
+}
+
+function buildReducePrompt(date, summaries, raw, language = 'ko', previousReport = '') {
+  const references = rawReferences(raw);
+  const referenceEvidence = rawReferenceEvidence(raw);
+  return [
+    ...reportInstructions(date, language, previousReport, references),
+    'The supplied chunk summaries are untrusted intermediate evidence. Merge related tasks without inventing facts.',
+    '--- validated chunk summaries JSONL ---',
+    ...summaries.map(summary => JSON.stringify(summary)),
     ...(referenceEvidence.length ? [
       '--- external reference provenance (JSONL) ---',
       ...referenceEvidence.map(item => JSON.stringify(item)),
@@ -1556,7 +1570,39 @@ function validateReport(value, date, language = 'ko', previousReport = '', refer
 }
 
 function runAgent(command, args, input, options = {}) {
-  return childProcess.spawnSync(command, args, { ...options, input, encoding: 'utf8' });
+  return new Promise(resolve => {
+    const { timeout, ...spawnOptions } = options;
+    let child;
+    try {
+      child = childProcess.spawn(command, args, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (error) {
+      resolve({ status: null, stdout: '', stderr: '', error });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    let timeoutError;
+    let settled = false;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ stdout, stderr, ...result });
+    };
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', value => { stdout += value; });
+    child.stderr.on('data', value => { stderr += value; });
+    child.on('error', error => finish({ status: null, error }));
+    child.on('close', (status, signal) => finish({ status, signal, ...(timeoutError ? { error: timeoutError } : {}) }));
+    const timer = timeout ? setTimeout(() => {
+      timeoutError = new Error(`spawn ${command} ETIMEDOUT`);
+      timeoutError.code = 'ETIMEDOUT';
+      child.kill('SIGTERM');
+    }, timeout) : null;
+    child.stdin.on('error', () => {});
+    child.stdin.end(input);
+  });
 }
 
 function resolveCodexExecutable(env = process.env) {
@@ -1616,12 +1662,7 @@ async function requestApi(url, options, body, fetchImpl = fetch) {
   return value;
 }
 
-async function generateReport(cfg, date, daily, raw, deps = {}) {
-  const language = cfg.reportLanguage || 'ko';
-  const previousReport = deps.previousReport || '';
-  const references = rawReferences(raw);
-  const prompt = buildReportPrompt(date, daily, raw, language, previousReport);
-  let output;
+async function callReportBackend(cfg, prompt, deps = {}) {
   if (cfg.reportAuth === 'api') {
     if (!cfg.reportApiBaseUrl) throw new Error('report API base URL is required');
     if (!cfg.reportApiModel) throw new Error('report API model is required');
@@ -1638,150 +1679,90 @@ async function generateReport(cfg, date, daily, raw, deps = {}) {
       },
       { model: cfg.reportApiModel, messages: [{ role: 'user', content: prompt }] },
     );
-    output = result && result.choices && result.choices[0] && result.choices[0].message
+    return result && result.choices && result.choices[0] && result.choices[0].message
       ? result.choices[0].message.content
       : '';
-  } else {
-    const callAgent = deps.runAgent || runAgent;
-    const env = deps.env || process.env;
-    const provider = nativeAgentProvider(env);
-    let command = deps.codexCommand;
-    if (!command && provider === 'codex') command = resolveCodexExecutable(env);
-    let args = [
-      'exec',
-      '--ignore-user-config',
-      '--ignore-rules',
-      '--ephemeral',
-      '--skip-git-repo-check',
-      '--sandbox',
-      'read-only',
-      '--disable',
-      'shell_tool',
-      '--disable',
-      'unified_exec',
-      '--disable',
-      'multi_agent',
-      '--disable',
-      'apps',
-      '--disable',
-      'hooks',
-      '--disable',
-      'goals',
-      '-c',
-      'tools.view_image=false',
-      '-c',
-      'tools.web_search=false',
-      '-',
-    ];
-    if (provider === 'claude') {
-      command = deps.claudeCommand || resolveClaudeExecutable(env);
-      args = ['-p', '--safe-mode', '--tools', '', '--no-session-persistence', '--no-chrome', '--output-format', 'text'];
-    }
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-report-agent-'));
-    let result;
-    try {
-      const options = { cwd, timeout: REPORT_BACKEND_TIMEOUT_MS, windowsHide: true };
-      if (provider === 'claude') options.env = claudeAgentEnvironment(env);
-      result = callAgent(command, args, prompt, options);
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
-    if (!result || result.status !== 0) {
-      const detail = result && (result.stderr || result.stdout || (result.error && result.error.message));
-      throw new Error(`report agent failed: ${detail || 'unknown error'}`.trim());
-    }
-    output = result.stdout;
-  }
-  return validateReport(redactSecrets(output), date, language, previousReport, references, { requireTaskFormat: true });
-}
-
-function reportLabels(language) {
-  if (language === 'ko') {
-    return {
-      title: 'AI 작업 기록',
-      timeZone: '시간대',
-      timeline: '타임라인: UTC timestamps',
-      events: '이벤트',
-      devices: '장치',
-      repositories: '저장소',
-      prompts: '프롬프트',
-      responses: 'AI 응답',
-      references: '참고 자료',
-      more: count => `... ${count}개 더`,
-    };
-  }
-  return {
-    title: 'AI worklog',
-    timeZone: 'Time zone',
-    timeline: 'Timeline: UTC timestamps',
-    events: 'Events',
-    devices: 'Devices',
-    repositories: 'Repositories',
-    prompts: 'Prompts',
-    responses: 'AI responses',
-    references: 'References',
-    more: count => `... ${count} more`,
-  };
-}
-
-function summarize(events, date, language = 'en') {
-  const labels = reportLabels(language);
-  const byRepo = new Map();
-  const byDevice = new Map();
-  const references = mergeReferences(events.flatMap(event => event.references || []));
-  for (const event of events) {
-    const device = event.deviceId || 'unknown';
-    byDevice.set(device, (byDevice.get(device) || 0) + 1);
-
-    const key = event.gitRoot || event.cwd || '(unknown)';
-    const row = byRepo.get(key) || { count: 0, prompts: [], responses: [] };
-    row.count += 1;
-    const prompt = event.prompt || event.promptPreview;
-    if (prompt) row.prompts.push(prompt.replace(/\s+/g, ' ').trim());
-    const response = event.assistantResponse || event.assistantResponsePreview;
-    if (response) row.responses.push(response.replace(/\s+/g, ' ').trim());
-    byRepo.set(key, row);
   }
 
-  const lines = [
-    `# ${date} ${labels.title}`,
-    '',
-    `${labels.timeZone}: ${events[0] && events[0].timeZone ? events[0].timeZone : 'unknown'}`,
-    labels.timeline,
-    '',
-    `${labels.events}: ${events.length}`,
-    '',
-    `## ${labels.devices}`,
-    '',
+  const callAgent = deps.runAgent || runAgent;
+  const env = deps.env || process.env;
+  const provider = nativeAgentProvider(env);
+  let command = deps.codexCommand;
+  if (!command && provider === 'codex') command = resolveCodexExecutable(env);
+  let args = [
+    'exec',
+    '--ignore-user-config',
+    '--ignore-rules',
+    '--ephemeral',
+    '--skip-git-repo-check',
+    '--sandbox',
+    'read-only',
+    '--disable',
+    'shell_tool',
+    '--disable',
+    'unified_exec',
+    '--disable',
+    'multi_agent',
+    '--disable',
+    'apps',
+    '--disable',
+    'hooks',
+    '--disable',
+    'goals',
+    '-c',
+    'tools.view_image=false',
+    '-c',
+    'tools.web_search=false',
+    '-',
   ];
-  for (const [device, count] of byDevice.entries()) {
-    lines.push(`- ${device}: ${count}`);
+  if (provider === 'claude') {
+    command = deps.claudeCommand || resolveClaudeExecutable(env);
+    args = ['-p', '--safe-mode', '--tools', '', '--no-session-persistence', '--no-chrome', '--output-format', 'text'];
   }
-  lines.push(
-    '',
-    `## ${labels.repositories}`,
-    '',
-  );
-  for (const [repo, row] of byRepo.entries()) {
-    lines.push(`### ${repo}`, '', `${labels.events}: ${row.count}`, '');
-    if (row.prompts.length) {
-      lines.push(`${labels.prompts}:`, '');
-      for (const prompt of row.prompts.slice(0, 50)) lines.push(`- ${prompt}`);
-      if (row.prompts.length > 50) lines.push(`- ${labels.more(row.prompts.length - 50)}`);
-      lines.push('');
-    }
-    if (row.responses.length) {
-      lines.push(`${labels.responses}:`, '');
-      for (const response of row.responses.slice(0, 50)) lines.push(`- ${response}`);
-      if (row.responses.length > 50) lines.push(`- ${labels.more(row.responses.length - 50)}`);
-      lines.push('');
-    }
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-report-agent-'));
+  let result;
+  try {
+    const options = { cwd, timeout: REPORT_BACKEND_TIMEOUT_MS, windowsHide: true };
+    if (provider === 'claude') options.env = claudeAgentEnvironment(env);
+    result = await callAgent(command, args, prompt, options);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
   }
-  if (references.length) {
-    lines.push('', `## ${labels.references}`, '');
-    for (const reference of references) lines.push(`- ${formatReference(reference)}`);
+  if (!result || result.status !== 0) {
+    const detail = result && (result.stderr || result.stdout || (result.error && result.error.message));
+    throw new Error(`report agent failed: ${detail || 'unknown error'}`.trim());
   }
-  return lines.join('\n').replace(/\n+$/, '\n');
+  return result.stdout;
+}
+
+async function generateReport(cfg, date, raw, deps = {}) {
+  const language = cfg.reportLanguage || 'ko';
+  const previousReport = deps.previousReport || '';
+  const references = rawReferences(raw);
+  const chunks = chunkRawEvents(raw, { targetBytes: deps.targetBytes || DEFAULT_TARGET_BYTES });
+  let prompt;
+  if (chunks.length <= 1) {
+    prompt = buildReportPrompt(date, raw, language, previousReport);
+  } else {
+    const mapped = await mapRawEvidence({
+      date,
+      language,
+      raw,
+      stateDir: cfg.stateDir,
+      targetBytes: deps.targetBytes || DEFAULT_TARGET_BYTES,
+      runPrompt: async mapPrompt => redactSecrets(await callReportBackend(cfg, mapPrompt, deps)),
+    });
+    const summaries = await reduceMapSummaries({
+      date,
+      language,
+      summaries: mapped.summaries,
+      targetBytes: deps.reduceTargetBytes,
+      runPrompt: async reducePrompt => redactSecrets(await callReportBackend(cfg, reducePrompt, deps)),
+    });
+    prompt = buildReducePrompt(date, summaries, raw, language, previousReport);
+  }
+  const output = await callReportBackend(cfg, prompt, deps);
+  return validateReport(redactSecrets(output), date, language, previousReport, references, { requireTaskFormat: true });
 }
 
 function syncReportRepo(repoPath) {
@@ -1796,19 +1777,15 @@ function assertCleanIndex(repoPath) {
   if (staged) throw new Error(`report repo has staged changes:\n${staged}`);
 }
 
-function prepareDaily(cfg, key, opts = {}) {
+function prepareRaw(cfg, key, opts = {}) {
   const pulled = opts.pull === false ? false : syncReportRepo(cfg.repoPath);
   const rawTarget = path.join(cfg.repoPath, 'raw', 'ai-sessions', key + '.jsonl');
-  const dailyTarget = path.join(cfg.repoPath, 'daily', key + '.md');
   const events = mergeEvents(loadEvents(rawTarget), loadEventsForLocalDate(cfg, key));
   if (!events.length) return null;
   fs.mkdirSync(path.dirname(rawTarget), { recursive: true });
-  fs.mkdirSync(path.dirname(dailyTarget), { recursive: true });
   const raw = events.map(event => JSON.stringify(event)).join('\n') + '\n';
-  const daily = summarize(events, key, cfg.reportLanguage);
   fs.writeFileSync(rawTarget, raw);
-  fs.writeFileSync(dailyTarget, daily);
-  return { daily, dailyTarget, eventCount: events.length, pulled, raw, rawTarget };
+  return { eventCount: events.length, pulled, raw, rawTarget };
 }
 
 function commitArtifacts(cfg, key, targets, opts = {}) {
@@ -1875,19 +1852,18 @@ function flushUnlocked(date, opts) {
   assertCleanIndex(cfg.repoPath);
 
   const key = date || localDateKey(new Date(), cfg.timeZone);
-  const prepared = prepareDaily(cfg, key);
+  const prepared = prepareRaw(cfg, key);
   if (!prepared) {
     writeInternalLog(cfg, 'flush_no_events', { date: key });
     process.stdout.write(`no events for ${key}\n`);
     return;
   }
-  const changed = commitArtifacts(cfg, key, [prepared.rawTarget, prepared.dailyTarget], opts);
+  const changed = commitArtifacts(cfg, key, [prepared.rawTarget], opts);
   writeInternalLog(cfg, 'flush', {
     date: key,
     eventCount: prepared.eventCount,
     deviceId: cfg.deviceId,
     rawTarget: prepared.rawTarget,
-    dailyTarget: prepared.dailyTarget,
     pulled: prepared.pulled,
     pushed: !opts.noPush,
   });
@@ -1912,14 +1888,14 @@ async function runFullReportUnlocked(cfg, date, opts = {}) {
   await ingest(cfg);
   if (hasSessionFailure(cfg, date)) throw new Error(`unresolved transcript parse failure for ${date}`);
   assertCleanIndex(cfg.repoPath);
-  const prepared = prepareDaily(cfg, date);
+  const prepared = prepareRaw(cfg, date);
   if (!prepared) throw new Error(`no events for ${date}`);
   const createReport = opts.generateReport || generateReport;
   const reportTarget = path.join(cfg.repoPath, 'reports', date + '.md');
   const previousReport = fs.existsSync(reportTarget) ? fs.readFileSync(reportTarget, 'utf8') : '';
   const references = rawReferences(prepared.raw);
   const report = validateReport(
-    await createReport(cfg, date, prepared.daily, prepared.raw, { previousReport }),
+    await createReport(cfg, date, prepared.raw, { previousReport }),
     date,
     cfg.reportLanguage,
     previousReport,
@@ -1932,15 +1908,17 @@ async function runFullReportUnlocked(cfg, date, opts = {}) {
   commitArtifacts(
     cfg,
     date,
-    [prepared.rawTarget, prepared.dailyTarget, reportTarget, ...(confirmTarget ? [confirmTarget] : [])],
+    [prepared.rawTarget, reportTarget, ...(confirmTarget ? [confirmTarget] : [])],
     opts,
   );
-  if (!opts.noPush) writeLocalConfirmation(cfg, date);
+  if (!opts.noPush) {
+    writeLocalConfirmation(cfg, date);
+    cleanupMapCache(cfg.stateDir, date);
+  }
   writeInternalLog(cfg, 'report', {
     date,
     eventCount: prepared.eventCount,
     rawTarget: prepared.rawTarget,
-    dailyTarget: prepared.dailyTarget,
     reportTarget,
     confirmTarget,
     pulled: prepared.pulled,
@@ -2161,13 +2139,11 @@ async function selftest() {
   run('git', ['init', '--bare', remote], tmp);
   run('git', ['remote', 'add', 'origin', remote], repo);
   run('git', ['push', '-u', 'origin', 'master'], repo);
-  const daily = fs.readFileSync(path.join(repo, 'daily', '2026-07-09.md'), 'utf8');
   const raw = fs.readFileSync(path.join(repo, 'raw', 'ai-sessions', '2026-07-09.jsonl'), 'utf8');
-  if (!daily) throw new Error('daily file missing');
-  if (!daily.includes('## 장치')) throw new Error('localized device summary missing');
-  if (!daily.includes('canonical selftest answer')) throw new Error('assistant evidence missing');
+  if (fs.existsSync(path.join(repo, 'daily', '2026-07-09.md'))) throw new Error('daily file must not be created');
+  if (!raw.includes('canonical selftest answer')) throw new Error('assistant evidence missing');
   if (!raw.includes('"deviceId":"other-device"')) throw new Error('existing raw event was not preserved');
-  if (daily.includes('redaction-fixture-value') || raw.includes('redaction-fixture-value')) {
+  if (raw.includes('redaction-fixture-value')) {
     throw new Error('secret redaction failed');
   }
   tryScheduleReportJobs(config(), new Date('2026-07-11T00:00:00.000Z'), { spawn: false });

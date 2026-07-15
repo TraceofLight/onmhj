@@ -1,7 +1,7 @@
 {
   "name": "onmhj",
-  "version": "0.1.13+codex.20260714015520",
-  "description": "Local AI-session capture with automatic final reports and ordered retries.",
+  "version": "0.1.14+codex.20260715025726",
+  "description": "Local AI-session capture with chunked raw-first reports and ordered retries.",
   "author": {
     "name": "onmhj maintainers"
   },
@@ -17,7 +17,7 @@
   "interface": {
     "displayName": "Onmhj",
     "shortDescription": "Record AI-session worklogs locally.",
-    "longDescription": "Captures Codex hook events and public references cited in final answers to local JSONL, publishes deterministic daily evidence, and generates validated task-centered final reports through local Codex auth or an OpenAI-compatible API. Missing reports are retried in work-date order, and a date is confirmed only after raw, daily, report, and device confirmation are committed successfully.",
+    "longDescription": "Captures Codex hook events and public references cited in final answers to local JSONL, then generates validated task-centered final reports from that raw evidence through local Codex auth or an OpenAI-compatible API. Large inputs are split on complete JSONL records, summarized with bounded concurrency, and resumed from validated part caches. Missing reports are retried in work-date order, and a date is confirmed only after raw, report, and device confirmation are committed successfully.",
     "developerName": "onmhj maintainers",
     "category": "Productivity",
     "capabilities": [

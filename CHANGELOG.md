@@ -2,12 +2,16 @@
 
 ## Unreleased
 
+## 0.1.14 - 2026-07-15
+
 - Added deterministic Codex, Claude, and OpenAI-compatible session-turn normalization with final assistant evidence.
 - Added incremental transcript cursors, metadata-only quarantine, retry, and affected-date confirmation blocking.
 - Skipped known Codex internal/context-only, compaction-only, and empty no-op turns, and replayed stale file cursors after parser upgrades.
 - Prevented final-report regeneration from removing prior report content.
 - Hid Windows worker, report-agent, and git subprocess windows during background report generation.
 - Added an `autoReport` gate and one-commit raw-only multi-date session publishing.
+- Removed deterministic daily artifacts so raw JSONL is the only report evidence source.
+- Added session-preserving 20 KiB map-reduce generation with bounded concurrency and resumable part caching.
 
 ## 0.1.13 - 2026-07-12
 

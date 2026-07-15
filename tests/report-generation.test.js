@@ -8,6 +8,12 @@ const test = require('node:test');
 const onmhj = require('../bin/onmhj.js');
 
 const date = '2026-07-11';
+const simpleRaw = JSON.stringify({
+  event: 'UserPromptSubmit',
+  sourceId: 'test-prompt',
+  tsUtc: `${date}T01:00:00.000Z`,
+  prompt: 'implemented automatic reports',
+}) + '\n';
 const codexAgentArgs = [
   'exec',
   '--ignore-user-config',
@@ -129,11 +135,10 @@ function createRuntime() {
 }
 
 test('builds a final-report prompt for the work date and evidence', () => {
-  const prompt = onmhj.buildReportPrompt(date, '# daily evidence', '{"event":"UserPromptSubmit"}\n');
+  const prompt = onmhj.buildReportPrompt(date, simpleRaw);
 
   assert.match(prompt, /2026-07-11/);
   assert.match(prompt, /# 2026-07-11 뭐 했지/);
-  assert.match(prompt, /# daily evidence/);
   assert.match(prompt, /UserPromptSubmit/);
   assert.match(prompt, /## 작업별 기록/);
   assert.match(prompt, /### T1\./);
@@ -145,7 +150,7 @@ test('builds a final-report prompt for the work date and evidence', () => {
 
 test('report prompt includes prior content with a verbatim preservation rule', () => {
   const previous = validReport().replace('- 변경 필요', '- 기존 고유 내용');
-  const prompt = onmhj.buildReportPrompt(date, 'daily', 'raw', 'ko', previous);
+  const prompt = onmhj.buildReportPrompt(date, simpleRaw, 'ko', previous);
 
   assert.match(prompt, /기존 고유 내용/);
   assert.match(prompt, /그대로 보존/);
@@ -159,7 +164,7 @@ test('report prompt requires collected references without inventing new URLs', (
     prompt: 'plugin validator의 hooks 오류를 조사해줘',
     references: [{ title: '외부 자료', url: 'https://example.com/article' }],
   }) + '\n';
-  const prompt = onmhj.buildReportPrompt(date, 'daily', raw);
+  const prompt = onmhj.buildReportPrompt(date, raw);
 
   assert.match(prompt, /#### 참고 자료/);
   assert.match(prompt, /https:\/\/example\.com\/article/);
@@ -287,7 +292,7 @@ test('builds and validates the English final-report contract', () => {
 #### Follow-up work
 - none
 `;
-  const prompt = onmhj.buildReportPrompt(date, 'daily', 'raw', 'en');
+  const prompt = onmhj.buildReportPrompt(date, simpleRaw, 'en');
 
   assert.match(prompt, /Yesterday's work/);
   assert.match(prompt, /## Task records/);
@@ -301,8 +306,7 @@ test('generates a validated report with Codex agent auth without a plugin root',
   const report = await onmhj.generateReport(
     { reportAuth: 'agent' },
     date,
-    '# daily evidence',
-    '{"event":"UserPromptSubmit"}\n',
+    simpleRaw,
     {
       env: {},
       codexCommand: 'codex-native',
@@ -316,7 +320,7 @@ test('generates a validated report with Codex agent auth without a plugin root',
   assert.equal(report, validReport());
   assert.equal(invocation.command, 'codex-native');
   assert.deepEqual(invocation.args, codexAgentArgs);
-  assert.match(invocation.input, /daily evidence/);
+  assert.match(invocation.input, /implemented automatic reports/);
   assert.ok(invocation.options.timeout > 0);
   assert.equal(invocation.options.windowsHide, true);
   assert.equal(fs.existsSync(invocation.options.cwd), false);
@@ -327,8 +331,7 @@ test('keeps Codex agent auth when CODEX_PLUGIN_ROOT is present', async () => {
   await onmhj.generateReport(
     { reportAuth: 'agent' },
     date,
-    'daily',
-    'raw',
+    simpleRaw,
     {
       env: { CODEX_PLUGIN_ROOT: 'codex-plugin' },
       claudeCommand: 'claude-native',
@@ -355,8 +358,7 @@ test('generates a validated report with Claude agent auth', async () => {
   const report = await onmhj.generateReport(
     { reportAuth: 'agent' },
     date,
-    '# daily evidence',
-    '{"event":"UserPromptSubmit"}\n',
+    simpleRaw,
     {
       env,
       claudeCommand: 'claude-native',
@@ -380,7 +382,7 @@ test('generates a validated report with Claude agent auth', async () => {
     '--output-format',
     'text',
   ]);
-  assert.match(invocation.input, /daily evidence/);
+  assert.match(invocation.input, /implemented automatic reports/);
   assert.equal(invocation.options.timeout, 10 * 60 * 1000);
   assert.equal(invocation.options.windowsHide, true);
   assert.notEqual(invocation.options.env, env);
@@ -399,8 +401,7 @@ test('uses ONMHJ_CLAUDE_EXECUTABLE for Claude agent auth', async () => {
   await onmhj.generateReport(
     { reportAuth: 'agent' },
     date,
-    'daily',
-    'raw',
+    simpleRaw,
     {
       env: {
         CLAUDE_PLUGIN_ROOT: 'claude-plugin',
@@ -426,8 +427,7 @@ test('generates a validated report with OpenAI-compatible API auth', async () =>
       reportApiKeyEnv: 'ONMHJ_TEST_KEY',
     },
     date,
-    '# daily evidence',
-    '{"event":"UserPromptSubmit"}\n',
+    simpleRaw,
     {
       env: { ONMHJ_TEST_KEY: 'secret-value' },
       async requestApi(url, options, body) {
@@ -442,12 +442,12 @@ test('generates a validated report with OpenAI-compatible API auth', async () =>
   assert.equal(request.options.headers.Authorization, 'Bearer secret-value');
   assert.ok(request.options.signal instanceof AbortSignal);
   assert.equal(request.body.model, 'report-model');
-  assert.match(request.body.messages[0].content, /daily evidence/);
+  assert.match(request.body.messages[0].content, /implemented automatic reports/);
 });
 
 test('rejects incomplete API configuration before requesting a report', async () => {
   await assert.rejects(
-    () => onmhj.generateReport({ reportAuth: 'api' }, date, 'daily', 'raw'),
+    () => onmhj.generateReport({ reportAuth: 'api' }, date, simpleRaw),
     /API base URL/,
   );
 });
@@ -473,8 +473,7 @@ test('surfaces Codex report generation failures', async () => {
     () => onmhj.generateReport(
       { reportAuth: 'agent' },
       date,
-      'daily',
-      'raw',
+      simpleRaw,
       { runAgent: () => ({ status: 1, stdout: '', stderr: 'agent failed' }) },
     ),
     /agent failed/,
@@ -486,8 +485,7 @@ test('surfaces Claude report generation failures', async () => {
     () => onmhj.generateReport(
       { reportAuth: 'agent' },
       date,
-      'daily',
-      'raw',
+      simpleRaw,
       {
         env: { CLAUDE_PLUGIN_ROOT: 'claude-plugin' },
         claudeCommand: 'claude-native',
@@ -503,8 +501,7 @@ test('surfaces Codex process launch errors', async () => {
     () => onmhj.generateReport(
       { reportAuth: 'agent' },
       date,
-      'daily',
-      'raw',
+      simpleRaw,
       { runAgent: () => ({ status: null, error: new Error('spawn denied') }) },
     ),
     /spawn denied/,
@@ -517,8 +514,7 @@ test('redacts credential-like values from generated reports', async () => {
   const report = await onmhj.generateReport(
     { reportAuth: 'agent', reportLanguage: 'ko' },
     date,
-    'daily',
-    'raw',
+    simpleRaw,
     {
       codexCommand: 'codex-native',
       runAgent: () => ({ status: 0, stdout: generated, stderr: '' }),
@@ -529,7 +525,60 @@ test('redacts credential-like values from generated reports', async () => {
   assert.match(report, /\[REDACTED\]/);
 });
 
-test('full pipeline commits raw, daily, report, and confirmation for the same work date', async () => {
+test('generates a large report through chunk map and final reduce calls', async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-chunked-report-'));
+  const raw = Array.from({ length: 8 }, (_, index) => JSON.stringify({
+    event: 'AISessionTurn',
+    sourceId: `chunk-source-${index}`,
+    deviceId: 'device',
+    provider: 'codex',
+    sessionId: `session-${index}`,
+    tsUtc: `${date}T0${index}:00:00.000Z`,
+    prompt: `작업 ${index} ` + '가'.repeat(200),
+    assistantResponse: `결과 ${index} ` + '나'.repeat(200),
+  })).join('\n') + '\n';
+  const prompts = [];
+
+  const report = await onmhj.generateReport(
+    { reportAuth: 'agent', reportLanguage: 'ko', stateDir },
+    date,
+    raw,
+    {
+      env: {},
+      targetBytes: 1200,
+      runAgent(_command, _args, input) {
+        prompts.push(input);
+        if (!input.includes('--- chunk metadata ---')) return { status: 0, stdout: validReport(), stderr: '' };
+        const metadata = JSON.parse(input.split('--- chunk metadata ---\n')[1].split('\n')[0]);
+        return {
+          status: 0,
+          stderr: '',
+          stdout: JSON.stringify({
+            schemaVersion: 1,
+            chunkId: metadata.chunkId,
+            tasks: [{
+              title: `청크 ${metadata.index}`,
+              background: ['확인된 배경'],
+              process: ['확인된 과정'],
+              decisions: [],
+              results: ['확인된 결과'],
+              followUps: [],
+              evidenceIds: [metadata.evidence[0]],
+              references: [],
+            }],
+          }),
+        };
+      },
+    },
+  );
+
+  assert.equal(report, validReport());
+  assert.ok(prompts.filter(prompt => prompt.includes('--- chunk metadata ---')).length > 1);
+  assert.equal(prompts.filter(prompt => prompt.includes('--- validated chunk summaries JSONL ---')).length, 1);
+  assert.ok(prompts.every(prompt => !prompt.includes('daily evidence')));
+});
+
+test('full pipeline commits raw, report, and confirmation without daily evidence', async () => {
   const cfg = createRuntime();
 
   await onmhj.runFullReport(cfg, date, {
@@ -537,7 +586,7 @@ test('full pipeline commits raw, daily, report, and confirmation for the same wo
   });
 
   assert.ok(fs.existsSync(path.join(cfg.repoPath, 'raw', 'ai-sessions', `${date}.jsonl`)));
-  assert.ok(fs.existsSync(path.join(cfg.repoPath, 'daily', `${date}.md`)));
+  assert.equal(fs.existsSync(path.join(cfg.repoPath, 'daily', `${date}.md`)), false);
   assert.equal(fs.readFileSync(path.join(cfg.repoPath, 'reports', `${date}.md`), 'utf8'), validReport());
   const remoteConfirmation = JSON.parse(fs.readFileSync(
     path.join(cfg.repoPath, 'state', 'devices', 'test-device.json'),
@@ -552,7 +601,7 @@ test('full pipeline commits raw, daily, report, and confirmation for the same wo
   assert.equal(childProcess.execFileSync('git', ['status', '--short'], { cwd: cfg.repoPath, encoding: 'utf8' }), '');
 });
 
-test('daily evidence includes the canonical final assistant response', async () => {
+test('raw report evidence preserves the canonical final assistant response', async () => {
   const cfg = createRuntime();
   fs.appendFileSync(path.join(cfg.stateDir, 'events', `${date}.jsonl`), JSON.stringify({
     schemaVersion: 1,
@@ -572,14 +621,20 @@ test('daily evidence includes the canonical final assistant response', async () 
     status: 'complete',
   }) + '\n');
 
-  await onmhj.runFullReport(cfg, date, { noPush: true, generateReport: async () => validReport() });
+  let reportRaw = '';
+  await onmhj.runFullReport(cfg, date, {
+    noPush: true,
+    generateReport: async (_cfg, _date, raw) => {
+      reportRaw = raw;
+      return validReport();
+    },
+  });
 
-  const daily = fs.readFileSync(path.join(cfg.repoPath, 'daily', `${date}.md`), 'utf8');
-  assert.match(daily, /AI 응답/);
-  assert.match(daily, /canonical final answer/);
+  assert.match(reportRaw, /canonical final answer/);
+  assert.equal(fs.existsSync(path.join(cfg.repoPath, 'daily', `${date}.md`)), false);
 });
 
-test('full pipeline adds collected references to daily evidence and the report prompt', async () => {
+test('full pipeline adds collected references to raw evidence and the report prompt', async () => {
   const cfg = createRuntime();
   fs.appendFileSync(path.join(cfg.stateDir, 'events', `${date}.jsonl`), JSON.stringify({
     event: 'AISessionTurn',
@@ -601,16 +656,13 @@ test('full pipeline adds collected references to daily evidence and the report p
 
   await onmhj.runFullReport(cfg, date, {
     noPush: true,
-    generateReport: async (_cfg, _date, _daily, raw) => {
-      prompt = onmhj.buildReportPrompt(date, _daily, raw);
+    generateReport: async (_cfg, _date, raw) => {
+      prompt = onmhj.buildReportPrompt(date, raw);
       return reportWithReferences();
     },
   });
 
-  const daily = fs.readFileSync(path.join(cfg.repoPath, 'daily', `${date}.md`), 'utf8');
   const raw = fs.readFileSync(path.join(cfg.repoPath, 'raw', 'ai-sessions', `${date}.jsonl`), 'utf8');
-  assert.match(daily, /## 참고 자료/);
-  assert.match(daily, /\[외부 자료\]\(https:\/\/example\.com\/article\)/);
   assert.match(raw, /"references"/);
   assert.match(prompt, /## 참고 자료/);
 });

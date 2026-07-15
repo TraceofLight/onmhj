@@ -32,7 +32,7 @@
 
   <rect class="bg" x="0" y="0" width="1280" height="800"/>
   <text class="title" x="64" y="64">onmhj workflow</text>
-  <text class="subtitle" x="64" y="92">Capture locally, publish daily evidence and final reports, retry until confirmed.</text>
+  <text class="subtitle" x="64" y="92">Capture canonical raw evidence, generate chunked final reports, retry until confirmed.</text>
 
   <rect class="lane" x="48" y="126" width="354" height="590" rx="20"/>
   <rect class="lane" x="462" y="126" width="354" height="590" rx="20"/>
@@ -79,10 +79,9 @@
   <text class="small" x="942" y="260">Multi-device safe</text>
 
   <rect class="card card-flush" x="914" y="324" width="278" height="120" rx="14"/>
-  <text class="card-title" x="942" y="360">Merge and dedupe</text>
+  <text class="card-title" x="942" y="360">Merge, chunk, reduce</text>
   <text class="card-text" x="942" y="386">raw/ai-sessions/YYYY-MM-DD.jsonl</text>
-  <text class="card-text" x="942" y="410">daily/YYYY-MM-DD.md</text>
-
+  <text class="card-text" x="942" y="410">20 KiB session-preserving parts</text>
   <text class="small" x="942" y="432">reports/YYYY-MM-DD.md</text>
 
   <rect class="card card-flush" x="914" y="486" width="278" height="84" rx="14"/>

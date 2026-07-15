@@ -1,6 +1,6 @@
 # Installation
 
-`onmhj` is installed as a local Codex or Claude Code plugin marketplace. Hooks record events locally. `flush` publishes raw and daily evidence to a separate report repo chosen by the user; `ejmhj` and automatic jobs add final reports.
+`onmhj` is installed as a local Codex or Claude Code plugin marketplace. Hooks record events locally. `flush` publishes raw evidence to a separate report repo chosen by the user; `ejmhj` and automatic jobs add final reports.
 
 ## Prerequisites
 
@@ -108,7 +108,7 @@ Automatic final report generation uses the active plugin runtime's local authent
 node /path/to/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent
 ```
 
-`report-lang` controls deterministic daily labels and the final report contract (`ko` or `en`). It defaults from the user's locale when unset. The Claude plugin uses the local Claude Code login; the Codex plugin and standalone CLI use the local Codex login. Set `ONMHJ_CLAUDE_EXECUTABLE` or `ONMHJ_CODEX_EXECUTABLE` to override the executable selected for that runtime. Agent mode runs non-interactively in an isolated temporary directory with a bounded timeout. Claude Code disables customizations, tools, browser integration, and session persistence; Codex ignores user configuration and rules and uses a read-only sandbox with report-irrelevant tools disabled. Plugin command instruction text remains English, while generated daily and report output follows `report-lang`.
+`report-lang` controls the final report contract (`ko` or `en`). It defaults from the user's locale when unset. The Claude plugin uses the local Claude Code login; the Codex plugin and standalone CLI use the local Codex login. Set `ONMHJ_CLAUDE_EXECUTABLE` or `ONMHJ_CODEX_EXECUTABLE` to override the executable selected for that runtime. Agent mode runs non-interactively in an isolated temporary directory with a bounded timeout. Claude Code disables customizations, tools, browser integration, and session persistence; Codex ignores user configuration and rules and uses a read-only sandbox with report-irrelevant tools disabled. Large raw inputs are split on complete JSONL records into session-preserving 20 KiB chunks, processed with concurrency three, cached for retry, and reduced into the final report.
 
 API mode is shared by both plugin runtimes and requires explicit configuration:
 
@@ -165,7 +165,7 @@ node /path/to/onmhj/bin/onmhj.js sessions
 
 The first scan records per-file byte cursors under `~/.local/state/onmhj/session-ingest/`. Parser failures create metadata-only quarantine entries and block final-report confirmation for the affected date until the same command retries successfully. OpenAI-compatible clients or proxies can instead import JSONL records containing `provider`, `tsUtc`, `cwd`, `request`, and `response`.
 
-Parser version 6 extracts public Markdown links, HTTP(S) URLs, and DOI values from final assistant answers into `AISessionTurn.references`. It excludes local files, localhost, private-network and local-only hosts, credentialed URLs, and URLs containing sensitive authentication query parameters. It does not inspect tool results or browsing history. Daily evidence lists every collected reference. Newly generated reports use numbered task sections, preserve the reference-to-turn provenance, and place supplied URLs only under the related task's `References` or `참고 자료` subsection. Existing legacy reports remain valid until explicitly regenerated.
+Parser version 6 extracts public Markdown links, HTTP(S) URLs, and DOI values from final assistant answers into `AISessionTurn.references`. It excludes local files, localhost, private-network and local-only hosts, credentialed URLs, and URLs containing sensitive authentication query parameters. It does not inspect tool results or browsing history. Newly generated reports use numbered task sections, preserve the reference-to-turn provenance, and place supplied URLs only under the related task's `References` or `참고 자료` subsection. Existing legacy reports remain valid until explicitly regenerated.
 
 Imported events go to `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`; run `flush YYYY-MM-DD` to write the report repo.
 
@@ -213,7 +213,7 @@ Flush to the report repo:
 node /path/to/onmhj/bin/onmhj.js flush
 ```
 
-Before writing, `flush` pulls the report repo with `git pull --rebase --autostash` when an upstream exists, merges the existing `raw/ai-sessions/YYYY-MM-DD.jsonl` with this device's local events, dedupes them, and regenerates the daily markdown. This lets multiple computers append to the same report repo date without overwriting each other.
+Before writing, `flush` pulls the report repo with `git pull --rebase --autostash` when an upstream exists, merges the existing `raw/ai-sessions/YYYY-MM-DD.jsonl` with this device's local events, and dedupes them. This lets multiple computers append to the same report repo date without overwriting each other.
 
 If you bypass `flush` with a custom backfill or direct report-repo edit, run the same pull first. Never generate from a stale checkout of the report repo.
 
@@ -221,7 +221,6 @@ Expected outputs after `flush`:
 
 ```txt
 raw/ai-sessions/YYYY-MM-DD.jsonl
-daily/YYYY-MM-DD.md
 ```
 
 `ejmhj` and automatic report jobs also add:
@@ -230,7 +229,7 @@ daily/YYYY-MM-DD.md
 reports/YYYY-MM-DD.md
 ```
 
-`flush` publishes raw and daily evidence only. `ejmhj` and automatic report jobs also generate the final report and confirm the work date. A missing or invalid final report is retried even when an older job says it completed. Commands commit and push unless `--no-push` is passed; `--no-push` never advances confirmation. Publication stops when the report repo already contains staged changes.
+`flush` publishes raw evidence only. `ejmhj` and automatic report jobs also generate the final report and confirm the work date. A missing or invalid final report is retried even when an older job says it completed. Commands commit and push unless `--no-push` is passed; `--no-push` never advances confirmation. Publication stops when the report repo already contains staged changes.
 
 ## Troubleshooting
 

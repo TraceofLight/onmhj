@@ -9,9 +9,10 @@ AI-session worklog capture for Codex and Claude Code.
 ## Why
 
 - Local-first hooks: session events append to local JSONL, not directly to git.
-- Git-backed history: `flush` writes raw JSONL and deterministic daily Markdown into a separate report repo.
-- Automatic final reports: report jobs turn daily evidence into `reports/YYYY-MM-DD.md` through the plugin runtime's local Claude Code or Codex login, or an OpenAI-compatible API.
-- External references: public links and DOI values cited in final assistant answers are stored separately and carried into daily evidence and final reports.
+- Git-backed history: `flush` writes canonical raw JSONL into a separate report repo.
+- Automatic final reports: report jobs turn raw evidence into `reports/YYYY-MM-DD.md` through the plugin runtime's local Claude Code or Codex login, or an OpenAI-compatible API.
+- Chunked generation: large workdays are split into session-preserving 20 KiB chunks, summarized by up to three isolated agents, and reduced into one validated report.
+- External references: public links and DOI values cited in final assistant answers are stored in raw evidence and carried into final reports.
 - Multi-device safe: each computer has a `deviceId`; existing raw logs are pulled, merged, and deduped.
 - Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.
 - Agent auth by default: the Claude plugin uses the local Claude Code login; the Codex plugin and standalone CLI use the local Codex login. API mode is shared.
@@ -76,8 +77,8 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj register <repo>` | Set the external report repo. |
 | `onmhj config ...` | Update timezone, device id, owner, automatic-report, language, auth, and API settings. |
 | `onmhj status` | Show config, local event count, confirmed floor, and job counts. |
-| `onmhj flush [date]` | Merge events and publish raw/daily evidence without confirming the date. |
-| `onmhj ejmhj [date]` | Publish raw/daily/final report for yesterday or the specified work date. |
+| `onmhj flush [date]` | Merge events and publish raw evidence without confirming the date. |
+| `onmhj ejmhj [date]` | Publish raw evidence and the final report for yesterday or the specified work date. |
 | `onmhj inject --text=...` | Add one normalized manual event. |
 | `onmhj import <events.jsonl>` | Import normalized events or OpenAI-compatible request/response captures. |
 | `onmhj sessions [--publish]` | Incrementally scan Codex and Claude transcripts; optionally publish all raw dates in one commit. |
@@ -110,15 +111,15 @@ An OpenAI-compatible capture record contains `provider`, `tsUtc`, `cwd`, and the
 
 `onmhj sessions` reads Codex and Claude transcripts incrementally. Each canonical `AISessionTurn` contains a real user request and its final answer when available; known tool results, skill injections, notifications, commands, and compaction records remain only in the original transcript. Canonical user prompts and final answers are stored completely after redaction.
 
-Public Markdown links, bare HTTP(S) URLs, and DOI values cited in a final assistant answer are normalized into the turn's `references` array. Local files, localhost, private-network addresses, local-only hostnames, credentialed URLs, and URLs with sensitive authentication query parameters are excluded. Tracking parameters and fragments are removed. Daily evidence lists the collected references. New final reports group work into numbered tasks with background, process, decisions, and results; each reference appears only in the related task's `References` or `참고 자료` subsection. Tool records and browsing history are not scanned.
+Public Markdown links, bare HTTP(S) URLs, and DOI values cited in a final assistant answer are normalized into the turn's `references` array. Local files, localhost, private-network addresses, local-only hostnames, credentialed URLs, and URLs with sensitive authentication query parameters are excluded. Tracking parameters and fragments are removed. New final reports group work into numbered tasks with background, process, decisions, and results; each reference appears only in the related task's `References` or `참고 자료` subsection. Tool records and browsing history are not scanned.
 
-Set `onmhj config --auto-report=false` to stop `SessionStart` from scheduling report jobs. `onmhj sessions --publish` then pulls the registered repo, blocks on any unresolved quarantine entry, replaces successfully replayed current-device session scopes in `raw/ai-sessions`, and creates one commit and push without changing `daily/`, `reports/`, report jobs, or confirmations. Other devices, sessions, and event types are preserved.
+Set `onmhj config --auto-report=false` to stop `SessionStart` from scheduling report jobs. `onmhj sessions --publish` then pulls the registered repo, blocks on any unresolved quarantine entry, replaces successfully replayed current-device session scopes in `raw/ai-sessions`, and creates one commit and push without changing `reports/`, report jobs, or confirmations. Other devices, sessions, and event types are preserved.
 
 File cursors live under `~/.local/state/onmhj/session-ingest/`. A parser-version replay replaces prior canonical output only after that transcript parses successfully. A malformed relevant record stops at its byte offset and creates a metadata-only quarantine entry; an unsuccessful replay keeps the previous canonical set and remains replayable from the start.
 
 Git-history backfills must include only commits authored or committed by the configured owner identity.
 
-Custom backfill jobs must start from the latest report repo state. Run `git pull --rebase --autostash` in the report repo before writing `raw/`, `daily/`, `reports/`, or `state/`.
+Custom backfill jobs must start from the latest report repo state. Run `git pull --rebase --autostash` in the report repo before writing `raw/`, `reports/`, or `state/`.
 
 ## Storage
 
@@ -128,6 +129,7 @@ Local machine:
 - events: `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`
 - internal logs: `~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl`
 - report jobs: `~/.local/state/onmhj/jobs/reports/YYYY-MM-DD.json`
+- resumable report parts: `~/.local/state/onmhj/report-parts/YYYY-MM-DD/INPUT_HASH/`
 - local confirmed watermark: `~/.local/state/onmhj/jobs/reports/confirmed.json`
 - worker log: `~/.local/state/onmhj/worker.log`
 - transcript cursors and quarantine: `~/.local/state/onmhj/session-ingest/`
@@ -135,13 +137,12 @@ Local machine:
 Report repo:
 
 - raw events: `raw/ai-sessions/YYYY-MM-DD.jsonl`
-- daily evidence: `daily/YYYY-MM-DD.md`
 - final report: `reports/YYYY-MM-DD.md`
 - device confirmations: `state/devices/DEVICE_ID.json`
 
-A date is confirmed only after its final report passes validation and raw, daily, report, and device confirmation are committed successfully. Completed jobs with a missing or invalid report are queued again automatically.
+A date is confirmed only after its final report passes validation and raw, report, and device confirmation are committed successfully. Completed jobs with a missing or invalid report are queued again automatically.
 
-`ejmhj --no-push` generates and commits raw, daily, and final report artifacts without writing confirmation. `flush --no-push` generates and commits raw and daily evidence only. Normal `ejmhj` uses the ordered job queue, so a later date cannot bypass an earlier retry and confirmation never moves backward.
+`ejmhj --no-push` generates and commits raw evidence plus the final report without writing confirmation. `flush --no-push` generates and commits raw evidence only. Normal `ejmhj` uses the ordered job queue, so a later date cannot bypass an earlier retry and confirmation never moves backward.
 
 ## Safety
 
@@ -153,5 +154,6 @@ A date is confirmed only after its final report passes validation and raw, daily
 - Final-report regeneration must preserve every prior non-heading report line; destructive output is rejected before the report or confirmation is written.
 - Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
 - Native agent reports run non-interactively in an isolated temporary directory with a bounded timeout. Codex ignores user configuration and rules and runs in a read-only sandbox with report-irrelevant tools disabled. Claude Code runs in safe mode with customizations, tools, browser integration, and session persistence disabled. Evidence is treated as untrusted data.
+- Chunked report generation never splits a JSONL record or AI turn. Each child call has its own timeout, and validated parts are reused after a retry.
 - Automatic publication refuses to run when the report repository already has staged changes and uses a repository-wide publication lock.
 - Local report dates use the configured timezone; event spool filenames use UTC.
