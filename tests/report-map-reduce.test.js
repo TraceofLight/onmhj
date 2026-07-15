@@ -61,6 +61,23 @@ test('rejects map summaries that cite unknown evidence', () => {
   assert.throws(() => validateMapSummary(JSON.stringify(value), chunk), /unknown evidence/);
 });
 
+test('rejects map references that were not collected in the raw chunk', () => {
+  const raw = JSON.stringify({
+    event: 'AISessionTurn',
+    sourceId: 'source-reference',
+    references: [{ url: 'https://example.com/allowed', title: '허용 자료' }],
+  }) + '\n';
+  const [chunk] = chunkRawEvents(raw, { targetBytes: 4096 });
+  const value = JSON.parse(summaryFor(chunk));
+  value.tasks[0].references = [{
+    url: 'https://example.com/invented',
+    title: '추가 자료',
+    evidenceIds: ['source-reference'],
+  }];
+
+  assert.throws(() => validateMapSummary(JSON.stringify(value), chunk), /unsupported reference/);
+});
+
 test('runs no more than three map subagents concurrently', async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-map-'));
   const raw = rawEvents(12);

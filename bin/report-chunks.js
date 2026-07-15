@@ -88,6 +88,9 @@ function chunkRawEvents(raw, options = {}) {
       evidenceIds: records.map(record => record.evidenceId),
       index,
       raw: chunkRaw,
+      referenceUrls: [...new Set(records.flatMap(record => (
+        Array.isArray(record.event.references) ? record.event.references.map(reference => reference.url) : []
+      )).filter(Boolean))],
       sessionKeys: [...new Set(records.map(record => record.sessionKey))],
     };
   });

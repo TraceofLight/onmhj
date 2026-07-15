@@ -13,6 +13,7 @@
 - Removed deterministic daily artifacts so raw JSONL is the only report evidence source.
 - Added session-preserving 20 KiB map generation with bounded concurrency, resumable part caching, and one final reducer call.
 - Retried transient invalid map output once without discarding valid parts.
+- Rejected map references not present in the corresponding raw evidence chunk.
 - Added an explicit Codex or Claude report-agent override while preserving runtime-native selection by default.
 
 ## 0.1.13 - 2026-07-12

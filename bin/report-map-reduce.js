@@ -6,7 +6,7 @@ const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
 
 const MAP_CONCURRENCY = 3;
 const MAP_ATTEMPTS = 2;
-const MAP_PROMPT_VERSION = 1;
+const MAP_PROMPT_VERSION = 2;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -34,6 +34,7 @@ function buildMapPrompt(date, language, chunk) {
       count: chunk.count,
       sessions: chunk.sessionKeys,
       evidence: chunk.evidenceIds,
+      allowedReferences: chunk.referenceUrls,
     }),
     '--- raw evidence JSONL ---',
     chunk.raw,
@@ -58,6 +59,7 @@ function validateMapSummary(output, chunk) {
     throw new Error(`map summary contract mismatch for chunk ${chunk.index}`);
   }
   const allowed = new Set(chunk.evidenceIds);
+  const allowedReferences = new Set(chunk.referenceUrls);
   for (const task of value.tasks) {
     if (!task || typeof task.title !== 'string' || !task.title.trim()) throw new Error('map summary task title is required');
     for (const field of ['background', 'process', 'decisions', 'results', 'followUps']) stringArray(task[field], field);
@@ -67,6 +69,7 @@ function validateMapSummary(output, chunk) {
     if (!Array.isArray(task.references)) throw new Error('map summary references must be an array');
     for (const reference of task.references) {
       if (!reference || typeof reference.url !== 'string' || !reference.url) throw new Error('map summary reference URL is required');
+      if (!allowedReferences.has(reference.url)) throw new Error('map summary contains unsupported reference');
       if (reference.title !== undefined && typeof reference.title !== 'string') throw new Error('map summary reference title is invalid');
       const referenceIds = stringArray(reference.evidenceIds, 'reference evidenceIds');
       if (!referenceIds.length || referenceIds.some(id => !allowed.has(id))) {
