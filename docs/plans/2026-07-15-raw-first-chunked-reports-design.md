@@ -163,7 +163,7 @@ Deterministically extract the complete reference provenance from raw and include
 
 Include `previousReport` only in the final reduction so regeneration can preserve all prior non-heading lines. Keep the existing final report and reference validators unchanged.
 
-If the combined map output exceeds 40 KiB, group map results on JSON record boundaries and run an intermediate reduction round using the same structured task contract. Divide the 40 KiB output budget across the groups, instruct each reducer to stay within its share, and reject oversized results. Repeat only if needed until the final reducer input is at most 40 KiB. This keeps each Claude reduction below the observed 10-minute child limit and prevents a reduction tree from repeating without shrinking.
+Pass all validated map summaries directly to one final reducer call. A 112 KiB real summary set completed through Codex in about two minutes, while intermediate Claude reductions added latency and unreliable output-size constraints. Keep the final child timeout, and preserve all valid map parts if that final call fails.
 
 ## Failure Semantics
 
@@ -181,7 +181,7 @@ If the combined map output exceeds 40 KiB, group map results on JSON record boun
 - Replace `prepareDaily` with raw-only artifact preparation.
 - Remove deterministic daily rendering helpers and `dailyTarget` publication.
 - Change report generation signatures from `(cfg, date, daily, raw, deps)` to `(cfg, date, raw, deps)`.
-- Replace `buildReportPrompt` with direct, map, intermediate-reduce, and final-reduce prompt builders.
+- Replace `buildReportPrompt` with direct, map, and final-reduce prompt builders.
 - Add deterministic JSONL session chunking and map-result validation.
 - Add bounded asynchronous backend execution and local part caching.
 - Commit raw, report, and confirmation only.
@@ -198,7 +198,7 @@ If the combined map output exceeds 40 KiB, group map results on JSON record boun
 - Prove at most three subagents run concurrently.
 - Prove successful parts are reused after one part fails.
 - Prove raw or prompt-version changes invalidate cached parts.
-- Prove oversized map output uses an intermediate reduction round.
+- Prove every validated map summary is passed to exactly one final reduction call.
 - Prove final validation, reference completeness, prior-content preservation, ordered retries, and confirmation ordering remain unchanged.
 
 Use injected agent runners in tests; do not make authenticated model calls in the automated suite.

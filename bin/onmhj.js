@@ -12,7 +12,7 @@ const {
   parseCodexRecord,
 } = require('./session-parsers');
 const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
-const { cleanupMapCache, mapRawEvidence, reduceMapSummaries } = require('./report-map-reduce');
+const { cleanupMapCache, mapRawEvidence } = require('./report-map-reduce');
 
 let CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
@@ -54,8 +54,8 @@ function usage() {
   return [
     'Usage:',
     '  onmhj hook <event>',
-    '  onmhj register <git-repo-path> [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api]',
-    '  onmhj config [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
+    '  onmhj register <git-repo-path> [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude]',
+    '  onmhj config [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj sessions [--publish] [--no-push]',
@@ -92,6 +92,7 @@ function config() {
     autoReport: cfg.autoReport !== false,
     reportLanguage: cfg.reportLanguage || userLanguage(),
     reportAuth: cfg.reportAuth || 'agent',
+    reportAgent: cfg.reportAgent || 'auto',
     reportApiBaseUrl: cfg.reportApiBaseUrl || '',
     reportApiModel: cfg.reportApiModel || '',
     reportApiKeyEnv: cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV,
@@ -375,6 +376,7 @@ function parseOptions(args) {
     if (arg.startsWith('--auto-report=')) opts.autoReport = arg.slice('--auto-report='.length);
     if (arg.startsWith('--report-lang=')) opts.reportLanguage = arg.slice('--report-lang='.length);
     if (arg.startsWith('--report-auth=')) opts.reportAuth = arg.slice('--report-auth='.length);
+    if (arg.startsWith('--report-agent=')) opts.reportAgent = arg.slice('--report-agent='.length);
     if (arg.startsWith('--report-api-base=')) opts.reportApiBaseUrl = arg.slice('--report-api-base='.length);
     if (arg.startsWith('--report-model=')) opts.reportApiModel = arg.slice('--report-model='.length);
     if (arg.startsWith('--report-api-key-env=')) opts.reportApiKeyEnv = arg.slice('--report-api-key-env='.length);
@@ -416,6 +418,7 @@ function register(repoPath, opts) {
     autoReport: cfg.autoReport,
     reportLanguage: cfg.reportLanguage,
     reportAuth: cfg.reportAuth,
+    reportAgent: cfg.reportAgent,
   });
   process.stdout.write(`registered ${resolved}\n`);
 }
@@ -427,6 +430,9 @@ function validateConfigOptions(opts) {
   }
   if (opts.reportAuth && !['agent', 'api'].includes(opts.reportAuth)) {
     throw new Error('report auth must be agent or api');
+  }
+  if (opts.reportAgent && !['auto', 'codex', 'claude'].includes(opts.reportAgent)) {
+    throw new Error('report agent must be auto, codex, or claude');
   }
   if (opts.autoReport !== undefined && !['true', 'false'].includes(opts.autoReport)) {
     throw new Error('auto report must be true or false');
@@ -459,6 +465,7 @@ function applyAutoReportConfig(cfg, opts) {
 function applyReportConfig(cfg, opts) {
   if (opts.reportLanguage) cfg.reportLanguage = opts.reportLanguage;
   if (opts.reportAuth) cfg.reportAuth = opts.reportAuth;
+  if (opts.reportAgent) cfg.reportAgent = opts.reportAgent;
   if (opts.reportApiBaseUrl) cfg.reportApiBaseUrl = opts.reportApiBaseUrl;
   if (opts.reportApiModel) cfg.reportApiModel = opts.reportApiModel;
   if (opts.reportApiKeyEnv) cfg.reportApiKeyEnv = opts.reportApiKeyEnv;
@@ -476,13 +483,14 @@ function reportRuntime(cfg) {
   }
   return {
     auth: 'agent',
-    description: 'Use local Codex authentication for isolated final report generation.',
+    agent: cfg.reportAgent,
+    description: `Use local ${cfg.reportAgent === 'auto' ? 'runtime-native' : cfg.reportAgent} authentication for isolated final report generation.`,
   };
 }
 
 function configure(opts) {
   validateConfigOptions(opts);
-  if (!opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
+  if (!opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportAgent && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
     throw new Error(usage());
   }
   const cfg = config();
@@ -500,8 +508,9 @@ function configure(opts) {
     autoReport: cfg.autoReport,
     reportLanguage: cfg.reportLanguage,
     reportAuth: cfg.reportAuth,
+    reportAgent: cfg.reportAgent,
   });
-  process.stdout.write(`configured timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} autoReport=${cfg.autoReport} reportLanguage=${cfg.reportLanguage} reportAuth=${cfg.reportAuth}\n`);
+  process.stdout.write(`configured timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} autoReport=${cfg.autoReport} reportLanguage=${cfg.reportLanguage} reportAuth=${cfg.reportAuth} reportAgent=${cfg.reportAgent}\n`);
 }
 
 function eventDedupeKey(event) {
@@ -1630,7 +1639,8 @@ function resolveCodexExecutable(env = process.env) {
   return executable;
 }
 
-function nativeAgentProvider(env = process.env) {
+function nativeAgentProvider(cfg, env = process.env) {
+  if (cfg.reportAgent && cfg.reportAgent !== 'auto') return cfg.reportAgent;
   return env.CLAUDE_PLUGIN_ROOT ? 'claude' : 'codex';
 }
 
@@ -1686,7 +1696,7 @@ async function callReportBackend(cfg, prompt, deps = {}) {
 
   const callAgent = deps.runAgent || runAgent;
   const env = deps.env || process.env;
-  const provider = nativeAgentProvider(env);
+  const provider = nativeAgentProvider(cfg, env);
   let command = deps.codexCommand;
   if (!command && provider === 'codex') command = resolveCodexExecutable(env);
   let args = [
@@ -1752,14 +1762,7 @@ async function generateReport(cfg, date, raw, deps = {}) {
       targetBytes: deps.targetBytes || DEFAULT_TARGET_BYTES,
       runPrompt: async mapPrompt => redactSecrets(await callReportBackend(cfg, mapPrompt, deps)),
     });
-    const summaries = await reduceMapSummaries({
-      date,
-      language,
-      summaries: mapped.summaries,
-      targetBytes: deps.reduceTargetBytes,
-      runPrompt: async reducePrompt => redactSecrets(await callReportBackend(cfg, reducePrompt, deps)),
-    });
-    prompt = buildReducePrompt(date, summaries, raw, language, previousReport);
+    prompt = buildReducePrompt(date, mapped.summaries, raw, language, previousReport);
   }
   const output = await callReportBackend(cfg, prompt, deps);
   return validateReport(redactSecrets(output), date, language, previousReport, references, { requireTaskFormat: true });
@@ -2070,6 +2073,7 @@ function status() {
     `autoReport: ${cfg.autoReport}`,
     `reportLanguage: ${cfg.reportLanguage}`,
     `reportAuth: ${report.auth}`,
+    `reportAgent: ${cfg.reportAgent}`,
     `reportApiBase: ${cfg.reportApiBaseUrl || '(unset)'}`,
     `reportModel: ${cfg.reportApiModel || '(unset)'}`,
     `reportApiKeyEnv: ${cfg.reportApiKeyEnv}`,
@@ -2204,10 +2208,13 @@ async function selftest() {
   configure({ timeZone: 'UTC' });
   const updated = config();
   if (updated.timeZone !== 'UTC') throw new Error('config update failed');
+  if (updated.reportAgent !== 'auto') throw new Error('default report agent must be auto');
   configure({ deviceId: 'test-device' });
   if (config().deviceId !== 'test-device') throw new Error('device config failed');
   configure({ reportLanguage: 'en' });
   if (config().reportLanguage !== 'en') throw new Error('report language config failed');
+  configure({ reportAgent: 'codex' });
+  if (config().reportAgent !== 'codex') throw new Error('report agent config failed');
   configure({ ownerName: 'onmhj-owner', ownerEmail: 'owner@example.local' });
   const ownerCfg = config();
   if (ownerCfg.ownerName !== 'onmhj-owner' || ownerCfg.ownerEmail !== 'owner@example.local') {

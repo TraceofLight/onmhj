@@ -417,6 +417,25 @@ test('uses ONMHJ_CLAUDE_EXECUTABLE for Claude agent auth', async () => {
   assert.equal(invokedCommand, 'claude-from-env');
 });
 
+test('uses configured Codex agent inside the Claude plugin runtime', async () => {
+  let invokedCommand;
+  await onmhj.generateReport(
+    { reportAuth: 'agent', reportAgent: 'codex' },
+    date,
+    simpleRaw,
+    {
+      env: { CLAUDE_PLUGIN_ROOT: 'claude-plugin' },
+      codexCommand: 'codex-native',
+      runAgent(command) {
+        invokedCommand = command;
+        return { status: 0, stdout: validReport(), stderr: '' };
+      },
+    },
+  );
+
+  assert.equal(invokedCommand, 'codex-native');
+});
+
 test('generates a validated report with OpenAI-compatible API auth', async () => {
   let request;
   const report = await onmhj.generateReport(

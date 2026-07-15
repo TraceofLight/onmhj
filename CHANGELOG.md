@@ -2,18 +2,6 @@
 
 ## Unreleased
 
-## 0.1.17 - 2026-07-15
-
-- Enforced per-group output budgets so hierarchical reduction shrinks toward its final input target.
-
-## 0.1.16 - 2026-07-15
-
-- Reduced intermediate summary batches to 40 KiB after observed 80 KiB Claude calls reached the child timeout.
-
-## 0.1.15 - 2026-07-15
-
-- Retried transient invalid map and intermediate-reduce output once without discarding valid parts.
-
 ## 0.1.14 - 2026-07-15
 
 - Added deterministic Codex, Claude, and OpenAI-compatible session-turn normalization with final assistant evidence.
@@ -23,7 +11,9 @@
 - Hid Windows worker, report-agent, and git subprocess windows during background report generation.
 - Added an `autoReport` gate and one-commit raw-only multi-date session publishing.
 - Removed deterministic daily artifacts so raw JSONL is the only report evidence source.
-- Added session-preserving 20 KiB map-reduce generation with bounded concurrency and resumable part caching.
+- Added session-preserving 20 KiB map generation with bounded concurrency, resumable part caching, and one final reducer call.
+- Retried transient invalid map output once without discarding valid parts.
+- Added an explicit Codex or Claude report-agent override while preserving runtime-native selection by default.
 
 ## 0.1.13 - 2026-07-12
 

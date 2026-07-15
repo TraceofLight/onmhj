@@ -105,10 +105,10 @@ node /path/to/onmhj/bin/onmhj.js config \
 Automatic final report generation uses the active plugin runtime's local authentication:
 
 ```sh
-node /path/to/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent
+node /path/to/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent --report-agent=auto
 ```
 
-`report-lang` controls the final report contract (`ko` or `en`). It defaults from the user's locale when unset. The Claude plugin uses the local Claude Code login; the Codex plugin and standalone CLI use the local Codex login. Set `ONMHJ_CLAUDE_EXECUTABLE` or `ONMHJ_CODEX_EXECUTABLE` to override the executable selected for that runtime. Agent mode runs non-interactively in an isolated temporary directory with a bounded timeout. Claude Code disables customizations, tools, browser integration, and session persistence; Codex ignores user configuration and rules and uses a read-only sandbox with report-irrelevant tools disabled. Large raw inputs are split on complete JSONL records into session-preserving 20 KiB chunks, processed with concurrency three, cached for retry, and reduced into the final report.
+`report-lang` controls the final report contract (`ko` or `en`). It defaults from the user's locale when unset. `report-agent=auto` selects the active plugin runtime's local login; use `codex` or `claude` to override it. Set `ONMHJ_CLAUDE_EXECUTABLE` or `ONMHJ_CODEX_EXECUTABLE` to override the selected executable. Agent mode runs non-interactively in an isolated temporary directory with a bounded timeout. Claude Code disables customizations, tools, browser integration, and session persistence; Codex ignores user configuration and rules and uses a read-only sandbox with report-irrelevant tools disabled. Large raw inputs are split on complete JSONL records into session-preserving 20 KiB chunks, processed with concurrency three, cached for retry, and passed together to one final reducer call.
 
 API mode is shared by both plugin runtimes and requires explicit configuration:
 

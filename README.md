@@ -15,7 +15,7 @@ AI-session worklog capture for Codex and Claude Code.
 - External references: public links and DOI values cited in final assistant answers are stored in raw evidence and carried into final reports.
 - Multi-device safe: each computer has a `deviceId`; existing raw logs are pulled, merged, and deduped.
 - Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.
-- Agent auth by default: the Claude plugin uses the local Claude Code login; the Codex plugin and standalone CLI use the local Codex login. API mode is shared.
+- Agent auth by default: `report-agent=auto` uses the active plugin runtime's local login; set `codex` or `claude` to override it. API mode is shared.
 - Native executable override: set `ONMHJ_CLAUDE_EXECUTABLE` or `ONMHJ_CODEX_EXECUTABLE` for a nonstandard installation path.
 
 ## Install
@@ -46,7 +46,8 @@ node bin/onmhj.js config \
   --owner-name="Your Name" \
   --owner-email=you@example.com \
   --report-lang=ko \
-  --report-auth=agent
+  --report-auth=agent \
+  --report-agent=auto
 ```
 
 Check capture status:

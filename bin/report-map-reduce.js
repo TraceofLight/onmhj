@@ -7,7 +7,6 @@ const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
 const MAP_CONCURRENCY = 3;
 const MAP_ATTEMPTS = 2;
 const MAP_PROMPT_VERSION = 1;
-const REDUCE_TARGET_BYTES = 40 * 1024;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -38,22 +37,6 @@ function buildMapPrompt(date, language, chunk) {
     }),
     '--- raw evidence JSONL ---',
     chunk.raw,
-  ].join('\n');
-}
-
-function buildIntermediateReducePrompt(date, language, group) {
-  const instruction = language === 'en'
-    ? 'Merge related tasks in these validated chunk summaries. Preserve confirmed facts, evidence IDs, and references.'
-    : '검증된 chunk summary에서 관련 작업을 병합하라. 확인된 사실, evidence ID, reference를 보존하라.';
-  return [
-    instruction,
-    `Work date: ${date}`,
-    `Chunk ID: ${group.chunkId}`,
-    'Return JSON only, without Markdown fences, using the same task schema as the input.',
-    `Keep the minified JSON output at or below ${group.outputTargetBytes} UTF-8 bytes. Merge duplication and use concise sentences while preserving confirmed facts.`,
-    'Do not invent evidence IDs, facts, or URLs.',
-    '--- validated chunk summaries JSONL ---',
-    ...group.summaries.map(summary => JSON.stringify(summary)),
   ].join('\n');
 }
 
@@ -115,14 +98,11 @@ async function mapLimit(items, limit, mapper) {
   return results;
 }
 
-async function runValidatedPrompt(runPrompt, prompt, chunk, maxBytes = Infinity) {
+async function runValidatedPrompt(runPrompt, prompt, chunk) {
   let lastError;
   for (let attempt = 0; attempt < MAP_ATTEMPTS; attempt += 1) {
     try {
       const summary = validateMapSummary(await runPrompt(prompt, chunk), chunk);
-      if (Buffer.byteLength(JSON.stringify(summary)) > maxBytes) {
-        throw new Error(`map summary exceeds ${maxBytes} bytes for chunk ${chunk.index}`);
-      }
       return summary;
     } catch (error) {
       lastError = error;
@@ -192,66 +172,6 @@ async function mapRawEvidence(options) {
   return { cacheDir, chunks, summaries };
 }
 
-function summaryEvidenceIds(summary) {
-  return [...new Set(summary.tasks.flatMap(task => [
-    ...task.evidenceIds,
-    ...task.references.flatMap(reference => reference.evidenceIds),
-  ]))];
-}
-
-function summaryGroups(summaries, targetBytes) {
-  const groups = [];
-  let current = [];
-  let bytes = 0;
-  const flush = () => {
-    if (!current.length) return;
-    const content = current.map(summary => JSON.stringify(summary)).join('\n') + '\n';
-    groups.push({
-      chunkId: `sha256:${sha256(content)}`,
-      evidenceIds: [...new Set(current.flatMap(summaryEvidenceIds))],
-      index: groups.length,
-      summaries: current,
-    });
-    current = [];
-    bytes = 0;
-  };
-  for (const summary of summaries) {
-    const size = Buffer.byteLength(JSON.stringify(summary)) + 1;
-    if (current.length && bytes + size > targetBytes) flush();
-    current.push(summary);
-    bytes += size;
-    if (bytes >= targetBytes) flush();
-  }
-  flush();
-  return groups;
-}
-
-async function reduceMapSummaries(options) {
-  const {
-    date,
-    language = 'ko',
-    runPrompt,
-    targetBytes = REDUCE_TARGET_BYTES,
-  } = options;
-  let summaries = options.summaries;
-  for (let round = 0; round < 6; round += 1) {
-    const size = Buffer.byteLength(summaries.map(summary => JSON.stringify(summary)).join('\n'));
-    if (size <= targetBytes) return summaries;
-    const groups = summaryGroups(summaries, targetBytes);
-    const outputTargetBytes = Math.max(1024, Math.floor((targetBytes - groups.length) / groups.length));
-    summaries = await mapLimit(groups, MAP_CONCURRENCY, async group => {
-      group.outputTargetBytes = outputTargetBytes;
-      return runValidatedPrompt(
-        runPrompt,
-        buildIntermediateReducePrompt(date, language, group),
-        group,
-        outputTargetBytes,
-      );
-    });
-  }
-  throw new Error('intermediate report summaries did not reduce below the target size');
-}
-
 function cleanupMapCache(stateDir, date) {
   fs.rmSync(path.join(stateDir, 'report-parts', date), { recursive: true, force: true });
 }
@@ -260,11 +180,8 @@ module.exports = {
   MAP_CONCURRENCY,
   MAP_ATTEMPTS,
   MAP_PROMPT_VERSION,
-  REDUCE_TARGET_BYTES,
-  buildIntermediateReducePrompt,
   buildMapPrompt,
   cleanupMapCache,
   mapRawEvidence,
-  reduceMapSummaries,
   validateMapSummary,
 };
