@@ -5,6 +5,7 @@ const path = require('node:path');
 const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
 
 const MAP_CONCURRENCY = 3;
+const MAP_ATTEMPTS = 2;
 const MAP_PROMPT_VERSION = 1;
 const REDUCE_TARGET_BYTES = 80 * 1024;
 
@@ -113,6 +114,18 @@ async function mapLimit(items, limit, mapper) {
   return results;
 }
 
+async function runValidatedPrompt(runPrompt, prompt, chunk) {
+  let lastError;
+  for (let attempt = 0; attempt < MAP_ATTEMPTS; attempt += 1) {
+    try {
+      return validateMapSummary(await runPrompt(prompt, chunk), chunk);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 function cacheDirectory(stateDir, date, language, raw, targetBytes) {
   const inputHash = sha256(JSON.stringify({
     language,
@@ -163,8 +176,7 @@ async function mapRawEvidence(options) {
   }
 
   await mapLimit(missing, MAP_CONCURRENCY, async chunk => {
-    const output = await runPrompt(buildMapPrompt(date, language, chunk), chunk);
-    const summary = validateMapSummary(output, chunk);
+    const summary = await runValidatedPrompt(runPrompt, buildMapPrompt(date, language, chunk), chunk);
     summaries[chunk.index] = summary;
     fs.writeFileSync(
       path.join(cacheDir, `part-${String(chunk.index).padStart(3, '0')}.json`),
@@ -222,8 +234,7 @@ async function reduceMapSummaries(options) {
     if (size <= targetBytes) return summaries;
     const groups = summaryGroups(summaries, targetBytes);
     summaries = await mapLimit(groups, MAP_CONCURRENCY, async group => {
-      const output = await runPrompt(buildIntermediateReducePrompt(date, language, group), group);
-      return validateMapSummary(output, group);
+      return runValidatedPrompt(runPrompt, buildIntermediateReducePrompt(date, language, group), group);
     });
   }
   throw new Error('intermediate report summaries did not reduce below the target size');
@@ -235,6 +246,7 @@ function cleanupMapCache(stateDir, date) {
 
 module.exports = {
   MAP_CONCURRENCY,
+  MAP_ATTEMPTS,
   MAP_PROMPT_VERSION,
   REDUCE_TARGET_BYTES,
   buildIntermediateReducePrompt,

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.15 - 2026-07-15
+
+- Retried transient invalid map and intermediate-reduce output once without discarding valid parts.
+
 ## 0.1.14 - 2026-07-15
 
 - Added deterministic Codex, Claude, and OpenAI-compatible session-turn normalization with final assistant evidence.

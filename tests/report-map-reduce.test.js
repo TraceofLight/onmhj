@@ -118,6 +118,29 @@ test('reuses valid cached parts and regenerates only a corrupt part', async () =
   assert.equal(calls, 1);
 });
 
+test('retries only a part whose first output fails validation', async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-map-retry-'));
+  const attempts = new Map();
+
+  const result = await mapRawEvidence({
+    date: '2026-07-14',
+    language: 'ko',
+    raw: rawEvents(6),
+    stateDir,
+    targetBytes: 1800,
+    async runPrompt(_prompt, chunk) {
+      const count = (attempts.get(chunk.index) || 0) + 1;
+      attempts.set(chunk.index, count);
+      if (chunk.index === 1 && count === 1) return 'temporary invalid output';
+      return summaryFor(chunk);
+    },
+  });
+
+  assert.equal(attempts.get(1), 2);
+  assert.ok([...attempts].every(([index, count]) => count === (index === 1 ? 2 : 1)));
+  assert.equal(result.summaries.length, result.chunks.length);
+});
+
 test('changes the cache key when raw evidence changes', async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-map-key-'));
   const runPrompt = async (_prompt, chunk) => summaryFor(chunk);
