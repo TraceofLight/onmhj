@@ -84,6 +84,7 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj import <events.jsonl>` | 정규화 event 또는 OpenAI-compatible request/response capture import |
 | `onmhj sessions [--publish]` | Codex·Claude transcript 증분 수집 및 선택적 raw-only 단일 커밋 발행 |
 | `onmhj worker` | pending report job 처리 |
+| `onmhj selftest` | 현재 사용자 설정을 바꾸지 않고 격리된 내장 검증 실행 |
 
 plugin command는 같은 CLI로 위임한다. Codex는 `/onmhj ...`, `/ejmhj [date]`를 사용하고 Claude Code는 `/onmhj:onmhj ...`, `/onmhj:ejmhj [date]`를 사용한다.
 
@@ -152,9 +153,11 @@ Report repo:
 - `flush`/worker는 쓰기 전에 pull한다. 직접 report repo를 수정하거나 custom backfill을 실행하면 동일한 pull을 수동으로 먼저 해야 한다.
 - Canonical prompt와 최종 answer는 전체를 수집하며 reasoning과 tool argument는 저장하지 않는다.
 - Reference는 최종 assistant 답변에 인용된 공개 URL만 수집하며 페이지 본문, 로컬 자료, browsing tool history는 저장하지 않는다.
-- 최종보고서 재생성은 기존 report의 모든 비제목 줄을 보존해야 하며, 파괴적인 출력은 report 또는 confirmation을 쓰기 전에 거부한다.
-- prompt/report input은 token, password, bearer credential, private key, API key류 패턴을 best-effort로 redaction한다.
-- native agent report는 격리된 임시 디렉터리에서 timeout을 두고 non-interactive로 실행한다. Codex는 user config와 rule을 무시하고 read-only sandbox에서 불필요한 tool을 비활성화한다. Claude Code는 safe mode에서 customization, tool, browser integration, session persistence를 비활성화한다. evidence는 신뢰할 수 없는 데이터로 취급한다.
-- chunked report generation은 JSONL record나 AI turn 중간을 자르지 않는다. 각 child 호출에 개별 timeout을 적용하고 검증된 part는 retry에서 재사용한다.
+- 전체 report pipeline은 생성과 검증이 모두 끝난 뒤에만 새 raw, report, confirmation을 쓴다. 기존 report를 재생성할 때는 모든 비제목 줄을 보존해야 하며, 검증에서 거부된 결과는 세 산출물을 모두 변경하지 않는다.
+- prompt/report input과 생성된 output, backend 오류 상세에는 token, password, bearer credential, private key, API key류 패턴에 대한 best-effort redaction을 적용한다.
+- native agent report는 격리된 임시 디렉터리에서 non-interactive로 실행한다. Codex는 user config와 rule을 무시하고 read-only sandbox에서 불필요한 tool을 비활성화한다. Claude Code는 safe mode에서 customization, tool, browser integration, session persistence를 비활성화한다. Evidence는 신뢰할 수 없는 데이터로 취급한다.
+- 각 model 호출은 최대 10분까지 기다리며, 전체 report job에는 별도의 wall-clock 제한이 없다.
+- chunked report generation은 JSONL record나 AI turn의 중간을 자르지 않는다. Map summary는 전달받은 모든 evidence ID를 포함해야 하며, invalid part만 한 번 재시도하고 valid part는 cache에서 재사용한다.
+- POSIX 호환 파일시스템에서는 재시도용 report-part 디렉터리와 파일 권한을 각각 `0700`, `0600`으로 설정해 현재 사용자만 읽고 쓸 수 있게 한다.
 - report repo에 이미 staged change가 있으면 자동 발행을 거부하며 repo 전체 publication lock을 사용한다.
 - report local date는 설정 timezone 기준이고, event spool 파일명은 UTC 기준이다.

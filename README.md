@@ -84,6 +84,7 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj import <events.jsonl>` | Import normalized events or OpenAI-compatible request/response captures. |
 | `onmhj sessions [--publish]` | Incrementally scan Codex and Claude transcripts; optionally publish all raw dates in one commit. |
 | `onmhj worker` | Process pending report jobs in the background. |
+| `onmhj selftest` | Run the isolated built-in verification without changing the active user config. |
 
 Plugin commands delegate to the same CLI: Codex uses `/onmhj ...` and `/ejmhj [date]`; Claude Code uses `/onmhj:onmhj ...` and `/onmhj:ejmhj [date]`.
 
@@ -152,9 +153,11 @@ A date is confirmed only after its final report passes validation and raw, repor
 - `flush`/worker pulls before writing; direct report-repo edits and custom backfills must do the same manually.
 - Canonical prompts and final answers are captured completely; reasoning and tool arguments are not persisted.
 - Reference capture uses only public URLs cited in final assistant answers; it does not retain page bodies, local resources, or browsing-tool history.
-- Final-report regeneration must preserve every prior non-heading report line; destructive output is rejected before the report or confirmation is written.
-- Prompt/report inputs get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
-- Native agent reports run non-interactively in an isolated temporary directory with a bounded timeout. Codex ignores user configuration and rules and runs in a read-only sandbox with report-irrelevant tools disabled. Claude Code runs in safe mode with customizations, tools, browser integration, and session persistence disabled. Evidence is treated as untrusted data.
-- Chunked report generation never splits a JSONL record or AI turn. Each child call has its own timeout, and validated parts are reused after a retry.
+- Full report generation writes new raw, report, and confirmation artifacts only after generation and validation succeed. Regeneration must also preserve every prior non-heading report line; rejected output leaves all three artifacts unchanged.
+- Prompt/report inputs, generated output, and backend failure details get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
+- Native agent reports run non-interactively in an isolated temporary directory. Codex ignores user configuration and rules and runs in a read-only sandbox with report-irrelevant tools disabled. Claude Code runs in safe mode with customizations, tools, browser integration, and session persistence disabled. Evidence is treated as untrusted data.
+- Every model call has its own 10-minute timeout; the full report job has no single wall-clock deadline.
+- Chunked report generation never splits a JSONL record or AI turn. A map summary must cover every supplied evidence ID; an invalid part is retried once, while valid parts are reused from cache.
+- On POSIX-compatible filesystems, resumable report-part directories and files are restricted to the current user with modes `0700` and `0600`.
 - Automatic publication refuses to run when the report repository already has staged changes and uses a repository-wide publication lock.
 - Local report dates use the configured timezone; event spool filenames use UTC.
