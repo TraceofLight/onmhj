@@ -16,7 +16,12 @@ function parseRawRecords(raw) {
     } catch {
       throw new Error(`invalid raw JSONL at line ${index + 1}`);
     }
-    const evidenceId = event.sourceId || `sha256:${sha256(line)}`;
+    if (!event || typeof event !== 'object' || Array.isArray(event)) {
+      throw new Error(`invalid raw JSONL event at line ${index + 1}`);
+    }
+    const evidenceId = typeof event.sourceId === 'string' && event.sourceId
+      ? event.sourceId
+      : `sha256:${sha256(line)}`;
     const sessionKey = event.sessionId
       ? [event.deviceId || '', event.provider || event.source || '', event.sessionId].join(':')
       : `event:${evidenceId}`;
@@ -45,7 +50,7 @@ function sessionGroups(records) {
 }
 
 function chunkRawEvents(raw, options = {}) {
-  const targetBytes = options.targetBytes || DEFAULT_TARGET_BYTES;
+  const targetBytes = options.targetBytes ?? DEFAULT_TARGET_BYTES;
   if (!Number.isInteger(targetBytes) || targetBytes < 1) throw new Error('targetBytes must be a positive integer');
 
   const groups = sessionGroups(parseRawRecords(raw));
@@ -89,8 +94,10 @@ function chunkRawEvents(raw, options = {}) {
       index,
       raw: chunkRaw,
       referenceUrls: [...new Set(records.flatMap(record => (
-        Array.isArray(record.event.references) ? record.event.references.map(reference => reference.url) : []
-      )).filter(Boolean))],
+        Array.isArray(record.event.references)
+          ? record.event.references.map(reference => reference && typeof reference === 'object' ? reference.url : '')
+          : []
+      )).filter(url => typeof url === 'string' && url))],
       sessionKeys: [...new Set(records.map(record => record.sessionKey))],
     };
   });

@@ -489,6 +489,26 @@ test('reports non-JSON API gateway failures clearly', async () => {
   );
 });
 
+test('redacts credential-like values from report API failures', async () => {
+  await assert.rejects(
+    () => onmhj.requestApi(
+      'https://llm.example/v1/chat/completions',
+      { method: 'POST' },
+      { model: 'report-model' },
+      async () => ({
+        ok: false,
+        status: 401,
+        text: async () => JSON.stringify({ error: { message: 'token=super-secret-api-value' } }),
+      }),
+    ),
+    error => {
+      assert.match(error.message, /token=\[REDACTED\]/);
+      assert.doesNotMatch(error.message, /super-secret-api-value/);
+      return true;
+    },
+  );
+});
+
 test('surfaces Codex report generation failures', async () => {
   await assert.rejects(
     () => onmhj.generateReport(
@@ -498,6 +518,22 @@ test('surfaces Codex report generation failures', async () => {
       { runAgent: () => ({ status: 1, stdout: '', stderr: 'agent failed' }) },
     ),
     /agent failed/,
+  );
+});
+
+test('redacts credential-like values from report agent failures', async () => {
+  await assert.rejects(
+    () => onmhj.generateReport(
+      { reportAuth: 'agent' },
+      date,
+      simpleRaw,
+      { runAgent: () => ({ status: 1, stdout: '', stderr: 'token=super-secret-agent-value' }) },
+    ),
+    error => {
+      assert.match(error.message, /token=\[REDACTED\]/);
+      assert.doesNotMatch(error.message, /super-secret-agent-value/);
+      return true;
+    },
   );
 });
 
@@ -701,10 +737,12 @@ test('full pipeline leaves an existing report untouched when regenerated content
   );
 
   assert.equal(fs.readFileSync(reportTarget, 'utf8'), previous);
+  assert.equal(fs.existsSync(path.join(cfg.repoPath, 'raw', 'ai-sessions', `${date}.jsonl`)), false);
 });
 
 test('report generation failure does not write confirmation', async () => {
   const cfg = createRuntime();
+  const rawTarget = path.join(cfg.repoPath, 'raw', 'ai-sessions', `${date}.jsonl`);
 
   await assert.rejects(
     () => onmhj.runFullReport(cfg, date, {
@@ -716,6 +754,8 @@ test('report generation failure does not write confirmation', async () => {
 
   assert.equal(fs.existsSync(path.join(cfg.repoPath, 'state', 'devices', 'test-device.json')), false);
   assert.equal(fs.existsSync(path.join(cfg.stateDir, 'jobs', 'reports', 'confirmed.json')), false);
+  assert.equal(fs.existsSync(rawTarget), false);
+  assert.equal(childProcess.execFileSync('git', ['status', '--short'], { cwd: cfg.repoPath, encoding: 'utf8' }), '');
 });
 
 test('unresolved transcript failure blocks report generation and confirmation', async () => {

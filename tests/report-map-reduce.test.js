@@ -35,7 +35,7 @@ function summaryFor(chunk) {
       decisions: [],
       results: ['확인된 결과'],
       followUps: [],
-      evidenceIds: [chunk.evidenceIds[0]],
+      evidenceIds: chunk.evidenceIds,
       references: [],
     }],
   });
@@ -59,6 +59,15 @@ test('rejects map summaries that cite unknown evidence', () => {
   value.tasks[0].evidenceIds = ['invented'];
 
   assert.throws(() => validateMapSummary(JSON.stringify(value), chunk), /unknown evidence/);
+});
+
+test('rejects map summaries that omit supplied evidence', () => {
+  const [chunk] = chunkRawEvents(rawEvents(2), { targetBytes: 4096 });
+  const value = JSON.parse(summaryFor(chunk));
+  value.tasks[0].evidenceIds = [chunk.evidenceIds[0]];
+
+  assert.equal(chunk.evidenceIds.length, 2);
+  assert.throws(() => validateMapSummary(JSON.stringify(value), chunk), /omits evidence/);
 });
 
 test('rejects map references that were not collected in the raw chunk', () => {
@@ -121,6 +130,10 @@ test('reuses valid cached parts and regenerates only a corrupt part', async () =
 
   const first = await mapRawEvidence({ ...options, runPrompt });
   assert.equal(calls, first.chunks.length);
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(path.join(first.cacheDir, 'manifest.json')).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(path.join(first.cacheDir, 'part-000.json')).mode & 0o777, 0o600);
+  }
 
   calls = 0;
   const second = await mapRawEvidence({ ...options, runPrompt });

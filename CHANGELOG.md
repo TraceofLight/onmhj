@@ -14,6 +14,10 @@
 - Added session-preserving 20 KiB map generation with bounded concurrency, resumable part caching, and one final reducer call.
 - Retried transient invalid map output once without discarding valid parts.
 - Rejected map references not present in the corresponding raw evidence chunk.
+- Required map summaries to cover every supplied evidence record and hardened malformed raw handling.
+- Redacted credential-like values from report backend failure details.
+- Restricted resumable report-part files to the current user.
+- Kept report repositories unchanged when generation or validation fails before publication.
 - Added an explicit Codex or Claude report-agent override while preserving runtime-native selection by default.
 
 ## 0.1.13 - 2026-07-12

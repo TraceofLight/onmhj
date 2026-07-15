@@ -109,3 +109,16 @@ test('rejects malformed raw JSONL with its line number', () => {
     /invalid raw JSONL at line 2/,
   );
 });
+
+test('rejects non-object records and invalid target sizes', () => {
+  assert.throws(() => chunkRawEvents('null\n'), /invalid raw JSONL event at line 1/);
+  assert.throws(() => chunkRawEvents(rawOf([event()]), { targetBytes: 0 }), /positive integer/);
+});
+
+test('collects only string URLs from reference objects', () => {
+  const [chunk] = chunkRawEvents(rawOf([event({
+    references: [null, 'invalid', { url: 42 }, { url: 'https://example.com/allowed' }],
+  })]));
+
+  assert.deepEqual(chunk.referenceUrls, ['https://example.com/allowed']);
+});

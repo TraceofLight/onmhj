@@ -6,7 +6,7 @@ const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
 
 const MAP_CONCURRENCY = 3;
 const MAP_ATTEMPTS = 2;
-const MAP_PROMPT_VERSION = 2;
+const MAP_PROMPT_VERSION = 3;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -23,7 +23,7 @@ function buildMapPrompt(date, language, chunk) {
     'Return JSON only, without Markdown fences.',
     'Use this exact shape:',
     '{"schemaVersion":1,"chunkId":"...","tasks":[{"title":"...","background":[],"process":[],"decisions":[],"results":[],"followUps":[],"evidenceIds":[],"references":[{"url":"...","title":"","evidenceIds":[]}]}]}',
-    'Every task must cite one or more supplied evidence IDs. Do not invent evidence IDs or URLs.',
+    'Every task must cite one or more supplied evidence IDs, and every supplied evidence ID must be cited by at least one task. Do not invent evidence IDs or URLs.',
     '',
     '--- chunk metadata ---',
     JSON.stringify({
@@ -60,12 +60,14 @@ function validateMapSummary(output, chunk) {
   }
   const allowed = new Set(chunk.evidenceIds);
   const allowedReferences = new Set(chunk.referenceUrls);
+  const cited = new Set();
   for (const task of value.tasks) {
     if (!task || typeof task.title !== 'string' || !task.title.trim()) throw new Error('map summary task title is required');
     for (const field of ['background', 'process', 'decisions', 'results', 'followUps']) stringArray(task[field], field);
     const evidenceIds = stringArray(task.evidenceIds, 'evidenceIds');
     if (!evidenceIds.length) throw new Error('map summary task evidenceIds are required');
     if (evidenceIds.some(id => !allowed.has(id))) throw new Error('map summary contains unknown evidence ID');
+    evidenceIds.forEach(id => cited.add(id));
     if (!Array.isArray(task.references)) throw new Error('map summary references must be an array');
     for (const reference of task.references) {
       if (!reference || typeof reference.url !== 'string' || !reference.url) throw new Error('map summary reference URL is required');
@@ -77,6 +79,7 @@ function validateMapSummary(output, chunk) {
       }
     }
   }
+  if (chunk.evidenceIds.some(id => !cited.has(id))) throw new Error('map summary omits evidence ID');
   return value;
 }
 
@@ -146,13 +149,13 @@ async function mapRawEvidence(options) {
 
   const chunks = chunkRawEvents(raw, { targetBytes });
   const cacheDir = cacheDirectory(stateDir, date, language, raw, targetBytes);
-  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(cacheDir, 'manifest.json'), JSON.stringify({
     schemaVersion: 1,
     date,
     language,
     chunks: chunks.map(chunk => ({ chunkId: chunk.chunkId, bytes: chunk.bytes })),
-  }, null, 2) + '\n');
+  }, null, 2) + '\n', { mode: 0o600 });
 
   const summaries = new Array(chunks.length);
   const missing = [];
@@ -169,6 +172,7 @@ async function mapRawEvidence(options) {
     fs.writeFileSync(
       path.join(cacheDir, `part-${String(chunk.index).padStart(3, '0')}.json`),
       JSON.stringify(summary, null, 2) + '\n',
+      { mode: 0o600 },
     );
   });
 

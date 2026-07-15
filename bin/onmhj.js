@@ -1666,12 +1666,12 @@ async function requestApi(url, options, body, fetchImpl = fetch) {
   try {
     value = JSON.parse(text);
   } catch {
-    if (!response.ok) throw new Error(`report API failed: HTTP ${response.status}: ${text || 'empty response'}`);
+    if (!response.ok) throw new Error(`report API failed: HTTP ${response.status}: ${redactSecrets(text || 'empty response')}`);
     throw new Error('report API returned invalid JSON');
   }
   if (!response.ok) {
     const message = value && value.error && value.error.message ? value.error.message : `HTTP ${response.status}`;
-    throw new Error(`report API failed: ${message}`);
+    throw new Error(`report API failed: ${redactSecrets(message)}`);
   }
   return value;
 }
@@ -1744,7 +1744,7 @@ async function callReportBackend(cfg, prompt, deps = {}) {
   }
   if (!result || result.status !== 0) {
     const detail = result && (result.stderr || result.stdout || (result.error && result.error.message));
-    throw new Error(`report agent failed: ${detail || 'unknown error'}`.trim());
+    throw new Error(`report agent failed: ${redactSecrets(detail || 'unknown error')}`.trim());
   }
   return result.stdout;
 }
@@ -1753,7 +1753,8 @@ async function generateReport(cfg, date, raw, deps = {}) {
   const language = cfg.reportLanguage || 'ko';
   const previousReport = deps.previousReport || '';
   const references = rawReferences(raw);
-  const chunks = chunkRawEvents(raw, { targetBytes: deps.targetBytes || DEFAULT_TARGET_BYTES });
+  const targetBytes = deps.targetBytes ?? DEFAULT_TARGET_BYTES;
+  const chunks = chunkRawEvents(raw, { targetBytes });
   let prompt;
   if (chunks.length <= 1) {
     prompt = buildReportPrompt(date, raw, language, previousReport);
@@ -1763,7 +1764,7 @@ async function generateReport(cfg, date, raw, deps = {}) {
       language,
       raw,
       stateDir: cfg.stateDir,
-      targetBytes: deps.targetBytes || DEFAULT_TARGET_BYTES,
+      targetBytes,
       runPrompt: async mapPrompt => redactSecrets(await callReportBackend(cfg, mapPrompt, deps)),
     });
     prompt = buildReducePrompt(date, mapped.summaries, raw, language, previousReport);
@@ -1789,9 +1790,11 @@ function prepareRaw(cfg, key, opts = {}) {
   const rawTarget = path.join(cfg.repoPath, 'raw', 'ai-sessions', key + '.jsonl');
   const events = mergeEvents(loadEvents(rawTarget), loadEventsForLocalDate(cfg, key));
   if (!events.length) return null;
-  fs.mkdirSync(path.dirname(rawTarget), { recursive: true });
   const raw = events.map(event => JSON.stringify(event)).join('\n') + '\n';
-  fs.writeFileSync(rawTarget, raw);
+  if (opts.write !== false) {
+    fs.mkdirSync(path.dirname(rawTarget), { recursive: true });
+    fs.writeFileSync(rawTarget, raw);
+  }
   return { eventCount: events.length, pulled, raw, rawTarget };
 }
 
@@ -1895,7 +1898,7 @@ async function runFullReportUnlocked(cfg, date, opts = {}) {
   await ingest(cfg);
   if (hasSessionFailure(cfg, date)) throw new Error(`unresolved transcript parse failure for ${date}`);
   assertCleanIndex(cfg.repoPath);
-  const prepared = prepareRaw(cfg, date);
+  const prepared = prepareRaw(cfg, date, { write: false });
   if (!prepared) throw new Error(`no events for ${date}`);
   const createReport = opts.generateReport || generateReport;
   const reportTarget = path.join(cfg.repoPath, 'reports', date + '.md');
@@ -1909,6 +1912,8 @@ async function runFullReportUnlocked(cfg, date, opts = {}) {
     references,
     { requireTaskFormat: true },
   );
+  fs.mkdirSync(path.dirname(prepared.rawTarget), { recursive: true });
+  fs.writeFileSync(prepared.rawTarget, prepared.raw);
   fs.mkdirSync(path.dirname(reportTarget), { recursive: true });
   fs.writeFileSync(reportTarget, report);
   const confirmTarget = opts.noPush ? '' : writeDeviceConfirmation(cfg, date);

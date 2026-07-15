@@ -126,7 +126,7 @@ Map output is structured evidence, not Markdown:
 }
 ```
 
-Require every factual item and reference to retain at least one evidence identifier. Reject invalid JSON, a mismatched chunk ID, unknown evidence IDs, or malformed task arrays.
+Require every task and reference to retain evidence identifiers, and require every supplied evidence identifier to appear in at least one task. Reject invalid JSON, a mismatched chunk ID, unknown or omitted evidence IDs, or malformed task arrays.
 
 Run at most three map subagents concurrently. Replace the synchronous native runner with a small asynchronous `child_process.spawn` wrapper so native and API backends share bounded concurrency without adding a dependency.
 
@@ -143,7 +143,7 @@ STATE/report-parts/YYYY-MM-DD/INPUT_HASH/
   part-001.json
 ```
 
-`INPUT_HASH` covers raw content, report language, map prompt version, and chunking version. A raw change or prompt-contract change automatically selects a new cache directory.
+`INPUT_HASH` covers raw content, report language, map prompt version, and target size. A raw change or prompt-contract change automatically selects a new cache directory; changed chunk content also invalidates a part through its chunk ID.
 
 On retry:
 
