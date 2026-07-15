@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.16 - 2026-07-15
+
+- Reduced intermediate summary batches to 40 KiB after observed 80 KiB Claude calls reached the child timeout.
+
 ## 0.1.15 - 2026-07-15
 
 - Retried transient invalid map and intermediate-reduce output once without discarding valid parts.

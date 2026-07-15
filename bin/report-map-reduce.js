@@ -7,7 +7,7 @@ const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
 const MAP_CONCURRENCY = 3;
 const MAP_ATTEMPTS = 2;
 const MAP_PROMPT_VERSION = 1;
-const REDUCE_TARGET_BYTES = 80 * 1024;
+const REDUCE_TARGET_BYTES = 40 * 1024;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
