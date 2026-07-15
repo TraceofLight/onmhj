@@ -50,6 +50,7 @@ function buildIntermediateReducePrompt(date, language, group) {
     `Work date: ${date}`,
     `Chunk ID: ${group.chunkId}`,
     'Return JSON only, without Markdown fences, using the same task schema as the input.',
+    `Keep the minified JSON output at or below ${group.outputTargetBytes} UTF-8 bytes. Merge duplication and use concise sentences while preserving confirmed facts.`,
     'Do not invent evidence IDs, facts, or URLs.',
     '--- validated chunk summaries JSONL ---',
     ...group.summaries.map(summary => JSON.stringify(summary)),
@@ -114,11 +115,15 @@ async function mapLimit(items, limit, mapper) {
   return results;
 }
 
-async function runValidatedPrompt(runPrompt, prompt, chunk) {
+async function runValidatedPrompt(runPrompt, prompt, chunk, maxBytes = Infinity) {
   let lastError;
   for (let attempt = 0; attempt < MAP_ATTEMPTS; attempt += 1) {
     try {
-      return validateMapSummary(await runPrompt(prompt, chunk), chunk);
+      const summary = validateMapSummary(await runPrompt(prompt, chunk), chunk);
+      if (Buffer.byteLength(JSON.stringify(summary)) > maxBytes) {
+        throw new Error(`map summary exceeds ${maxBytes} bytes for chunk ${chunk.index}`);
+      }
+      return summary;
     } catch (error) {
       lastError = error;
     }
@@ -233,8 +238,15 @@ async function reduceMapSummaries(options) {
     const size = Buffer.byteLength(summaries.map(summary => JSON.stringify(summary)).join('\n'));
     if (size <= targetBytes) return summaries;
     const groups = summaryGroups(summaries, targetBytes);
+    const outputTargetBytes = Math.max(1024, Math.floor((targetBytes - groups.length) / groups.length));
     summaries = await mapLimit(groups, MAP_CONCURRENCY, async group => {
-      return runValidatedPrompt(runPrompt, buildIntermediateReducePrompt(date, language, group), group);
+      group.outputTargetBytes = outputTargetBytes;
+      return runValidatedPrompt(
+        runPrompt,
+        buildIntermediateReducePrompt(date, language, group),
+        group,
+        outputTargetBytes,
+      );
     });
   }
   throw new Error('intermediate report summaries did not reduce below the target size');

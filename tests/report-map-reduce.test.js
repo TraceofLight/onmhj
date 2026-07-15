@@ -192,16 +192,56 @@ test('reduces oversized intermediate summaries on JSON record boundaries', async
   assert.ok(Buffer.byteLength(reduced.map(value => JSON.stringify(value)).join('\n')) <= 1500);
 });
 
+test('retries intermediate output that exceeds its assigned byte budget', async () => {
+  const chunks = chunkRawEvents(rawEvents(2), { targetBytes: 1800 });
+  const summaries = chunks.map(chunk => {
+    const value = JSON.parse(summaryFor(chunk));
+    value.tasks[0].process = ['입력 '.repeat(500)];
+    return value;
+  });
+  const attempts = new Map();
+
+  const reduced = await reduceMapSummaries({
+    date: '2026-07-14',
+    language: 'ko',
+    summaries,
+    targetBytes: 1500,
+    async runPrompt(_prompt, group) {
+      const count = (attempts.get(group.chunkId) || 0) + 1;
+      attempts.set(group.chunkId, count);
+      return JSON.stringify({
+        schemaVersion: 1,
+        chunkId: group.chunkId,
+        tasks: [{
+          title: '병합 작업',
+          background: [],
+          process: [count === 1 ? '초과 '.repeat(500) : '축약 과정'],
+          decisions: [],
+          results: ['축약 결과'],
+          followUps: [],
+          evidenceIds: [group.evidenceIds[0]],
+          references: [],
+        }],
+      });
+    },
+  });
+
+  assert.ok([...attempts.values()].every(count => count === 2));
+  assert.ok(Buffer.byteLength(reduced.map(value => JSON.stringify(value)).join('\n')) <= 1500);
+});
+
 test('intermediate reduction prompt does not contain raw evidence', () => {
   const [chunk] = chunkRawEvents(rawEvents(1), { targetBytes: 4096 });
   const summary = JSON.parse(summaryFor(chunk));
   const group = {
     chunkId: 'sha256:group',
     evidenceIds: chunk.evidenceIds,
+    outputTargetBytes: 4096,
     summaries: [summary],
   };
 
   const prompt = buildIntermediateReducePrompt('2026-07-14', 'ko', group);
   assert.match(prompt, /sha256:group/);
+  assert.match(prompt, /4096 UTF-8 bytes/);
   assert.doesNotMatch(prompt, /raw evidence JSONL/);
 });

@@ -163,7 +163,7 @@ Deterministically extract the complete reference provenance from raw and include
 
 Include `previousReport` only in the final reduction so regeneration can preserve all prior non-heading lines. Keep the existing final report and reference validators unchanged.
 
-If the combined map output exceeds 40 KiB, group map results on JSON record boundaries and run an intermediate reduction round using the same structured task contract. Repeat until the final reducer input is at most 40 KiB. This keeps each Claude reduction comfortably below the observed 10-minute child limit while preserving a bounded reduction tree for unusually large workdays.
+If the combined map output exceeds 40 KiB, group map results on JSON record boundaries and run an intermediate reduction round using the same structured task contract. Divide the 40 KiB output budget across the groups, instruct each reducer to stay within its share, and reject oversized results. Repeat only if needed until the final reducer input is at most 40 KiB. This keeps each Claude reduction below the observed 10-minute child limit and prevents a reduction tree from repeating without shrinking.
 
 ## Failure Semantics
 
