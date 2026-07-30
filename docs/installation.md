@@ -112,7 +112,7 @@ node /path/to/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent --r
 
 Agent mode runs non-interactively in an isolated temporary directory. Claude Code disables customizations, tools, browser integration, and session persistence; Codex ignores user configuration and rules and uses a read-only sandbox with report-irrelevant tools disabled. Each native-agent or API model call has its own 10-minute timeout; the full report job has no single wall-clock deadline.
 
-Large raw inputs are split on complete JSONL records into session-preserving 20 KiB chunks, processed with concurrency three, cached for retry, and passed together to one final reducer call. Every supplied evidence ID must be covered by a validated map summary. On POSIX-compatible filesystems, part-cache directories and files use modes `0700` and `0600`.
+Large raw inputs are split on complete JSONL records into session-preserving 20 KiB chunks, processed with concurrency three, and cached for retry. If validated map summaries exceed the 96 KiB final-input bound, they are merged in bounded intermediate batches before the final reducer call. Every supplied evidence ID must be covered by each validated intermediate summary chain. On POSIX-compatible filesystems, part-cache directories and files use modes `0700` and `0600`.
 
 API mode is shared by both plugin runtimes and requires explicit configuration:
 

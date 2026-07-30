@@ -635,6 +635,60 @@ test('generates a large report through chunk map and final reduce calls', async 
   assert.ok(prompts.every(prompt => !prompt.includes('daily evidence')));
 });
 
+test('bounds the final reducer input with intermediate summary reductions', async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-hierarchical-report-'));
+  const raw = Array.from({ length: 8 }, (_, index) => JSON.stringify({
+    event: 'AISessionTurn',
+    sourceId: `large-source-${index}`,
+    deviceId: 'device',
+    provider: 'codex',
+    sessionId: `session-${index}`,
+    tsUtc: `${date}T0${index}:00:00.000Z`,
+    prompt: `작업 ${index} ` + '가'.repeat(200),
+    assistantResponse: `결과 ${index} ` + '나'.repeat(200),
+  })).join('\n') + '\n';
+  const prompts = [];
+
+  await onmhj.generateReport(
+    { reportAuth: 'agent', reportLanguage: 'ko', stateDir },
+    date,
+    raw,
+    {
+      env: {},
+      targetBytes: 1200,
+      runAgent(_command, _args, input) {
+        prompts.push(input);
+        if (!input.includes('--- chunk metadata ---')) return { status: 0, stdout: validReport(), stderr: '' };
+        const metadata = JSON.parse(input.split('--- chunk metadata ---\n')[1].split('\n')[0]);
+        const intermediate = input.includes('retain every supplied evidence ID');
+        return {
+          status: 0,
+          stderr: '',
+          stdout: JSON.stringify({
+            schemaVersion: 1,
+            chunkId: metadata.chunkId,
+            tasks: [{
+              title: intermediate ? `병합 ${metadata.index}` : `청크 ${metadata.index}`,
+              background: intermediate ? [] : ['가'.repeat(12000)],
+              process: [],
+              decisions: [],
+              results: [],
+              followUps: [],
+              evidenceIds: metadata.evidence,
+              references: [],
+            }],
+          }),
+        };
+      },
+    },
+  );
+
+  assert.ok(prompts.some(prompt => prompt.includes('retain every supplied evidence ID')));
+  const finalPrompt = prompts.find(prompt => prompt.includes('--- validated chunk summaries JSONL ---'));
+  assert.ok(finalPrompt);
+  assert.ok(Buffer.byteLength(finalPrompt) < 96 * 1024 + 8 * 1024);
+});
+
 test('full pipeline commits raw, report, and confirmation without daily evidence', async () => {
   const cfg = createRuntime();
 

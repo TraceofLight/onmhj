@@ -12,7 +12,7 @@ const {
   parseCodexRecord,
 } = require('./session-parsers');
 const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
-const { cleanupMapCache, mapRawEvidence } = require('./report-map-reduce');
+const { cleanupMapCache, mapRawEvidence, reduceMapSummaries } = require('./report-map-reduce');
 
 let CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
@@ -1137,7 +1137,7 @@ function acquireLock(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const existing = readJson(file, null);
   const stale = existing && existing.ts && Date.now() - Date.parse(existing.ts) > LOCK_STALE_MS;
-  if (existing && (stale || (existing.pid && !pidAlive(existing.pid)))) {
+  if (existing && ((!existing.pid && stale) || (existing.pid && !pidAlive(existing.pid)))) {
     try { fs.unlinkSync(file); } catch {}
   }
   try {
@@ -1164,7 +1164,14 @@ function withEventSpoolLock(cfg, action) {
 }
 
 function releaseLock(file) {
+  const existing = readJson(file, null);
+  if (!existing || existing.pid !== process.pid) return;
   try { fs.unlinkSync(file); } catch {}
+}
+
+function lockOwned(file) {
+  const existing = readJson(file, null);
+  return Boolean(existing && existing.pid === process.pid);
 }
 
 function enqueueReportJob(cfg, date, opts = {}) {
@@ -1767,7 +1774,13 @@ async function generateReport(cfg, date, raw, deps = {}) {
       targetBytes,
       runPrompt: async mapPrompt => redactSecrets(await callReportBackend(cfg, mapPrompt, deps)),
     });
-    prompt = buildReducePrompt(date, mapped.summaries, raw, language, previousReport);
+    const summaries = await reduceMapSummaries({
+      date,
+      language,
+      summaries: mapped.summaries,
+      runPrompt: async reducePrompt => redactSecrets(await callReportBackend(cfg, reducePrompt, deps)),
+    });
+    prompt = buildReducePrompt(date, summaries, raw, language, previousReport);
   }
   const output = await callReportBackend(cfg, prompt, deps);
   return validateReport(redactSecrets(output), date, language, previousReport, references, { requireTaskFormat: true });
@@ -2047,6 +2060,10 @@ async function worker() {
   }
   writeInternalLog(cfg, 'worker_start');
   const tick = async () => {
+    if (!lockOwned(lock)) {
+      writeInternalLog(cfg, 'worker_superseded');
+      return;
+    }
     const nextDelay = await processReportJobs(cfg);
     if (nextDelay) {
       writeInternalLog(cfg, 'worker_sleep', { nextDelayMs: nextDelay });
@@ -2298,6 +2315,7 @@ module.exports = {
   publishSessionEvents,
   requestApi,
   readReportJob,
+  releaseLock,
   reportScheduleState,
   runEjmhj,
   runFullReport,

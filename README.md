@@ -11,7 +11,7 @@ AI-session worklog capture for Codex and Claude Code.
 - Local-first hooks: session events append to local JSONL, not directly to git.
 - Git-backed history: `flush` writes canonical raw JSONL into a separate report repo.
 - Automatic final reports: report jobs turn raw evidence into `reports/YYYY-MM-DD.md` through the plugin runtime's local Claude Code or Codex login, or an OpenAI-compatible API.
-- Chunked generation: large workdays are split into session-preserving 20 KiB chunks, summarized by up to three isolated agents, and reduced into one validated report.
+- Chunked generation: large workdays are split into session-preserving 20 KiB chunks, summarized by up to three isolated agents, then hierarchically reduced within a bounded final input.
 - External references: public links and DOI values cited in final assistant answers are stored in raw evidence and carried into final reports.
 - Multi-device safe: each computer has a `deviceId`; existing raw logs are pulled, merged, and deduped.
 - Automatic catch-up: background jobs retry every unconfirmed report date until `confirmedThrough` advances.

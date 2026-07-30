@@ -8,6 +8,8 @@ const { chunkRawEvents } = require('../bin/report-chunks');
 const {
   buildMapPrompt,
   mapRawEvidence,
+  reduceMapSummaries,
+  summaryBytes,
   validateMapSummary,
 } = require('../bin/report-map-reduce');
 
@@ -180,4 +182,42 @@ test('changes the cache key when raw evidence changes', async () => {
   });
 
   assert.notEqual(first.cacheDir, second.cacheDir);
+});
+
+test('reduces validated summaries in bounded batches without dropping evidence IDs', async () => {
+  const chunks = chunkRawEvents(rawEvents(8), { targetBytes: 1800 });
+  const summaries = chunks.map(chunk => JSON.parse(summaryFor(chunk)));
+  const calls = [];
+  const reduced = await reduceMapSummaries({
+    date: '2026-07-14',
+    language: 'ko',
+    summaries,
+    targetBytes: 700,
+    maxBytes: 4096,
+    async runPrompt(prompt, chunk) {
+      calls.push({ prompt, chunk });
+      return JSON.stringify({
+        schemaVersion: 1,
+        chunkId: chunk.chunkId,
+        tasks: [{
+          title: `병합 ${chunk.index}`,
+          background: [],
+          process: [],
+          decisions: [],
+          results: [],
+          followUps: [],
+          evidenceIds: chunk.evidenceIds,
+          references: [],
+        }],
+      });
+    },
+  });
+
+  assert.ok(calls.length > 1);
+  assert.ok(calls.every(call => call.prompt.includes('retain every supplied evidence ID')));
+  assert.ok(summaryBytes(reduced) <= 700);
+  assert.deepEqual(
+    [...new Set(reduced.flatMap(summary => summary.tasks.flatMap(task => task.evidenceIds)))].sort(),
+    chunks.flatMap(chunk => chunk.evidenceIds).sort(),
+  );
 });

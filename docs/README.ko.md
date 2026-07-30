@@ -11,7 +11,7 @@ Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
 - local-first hook: 세션 이벤트는 git에 바로 쓰지 않고 local JSONL에 append한다.
 - git-backed history: `flush`가 별도 report repo에 canonical raw JSONL을 쓴다.
 - automatic final reports: report job이 plugin runtime에 맞는 로컬 Claude Code 또는 Codex 로그인이나 OpenAI 호환 API를 통해 `reports/YYYY-MM-DD.md` 최종보고서를 만든다.
-- chunked generation: 큰 작업일은 세션을 보존한 약 20 KiB 청크로 나누고 최대 3개 격리 agent가 병렬 요약한 뒤 하나의 검증된 report로 병합한다.
+- chunked generation: 큰 작업일은 세션을 보존한 약 20 KiB 청크로 나누고 최대 3개 격리 agent가 병렬 요약한 뒤, 최종 입력 상한 안에서 계층 병합해 검증된 report로 만든다.
 - external references: 최종 assistant 답변이 인용한 공개 링크와 DOI를 raw evidence에 저장해 최종보고서에 반영한다.
 - multi-device safe: 컴퓨터마다 `deviceId`를 두고, 기존 raw 로그를 pull/merge/dedupe한다.
 - automatic catch-up: background job이 확정되지 않은 날짜를 `confirmedThrough`가 전진할 때까지 재시도한다.

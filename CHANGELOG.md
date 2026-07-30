@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bounded final report reduction with validated intermediate summaries when map output exceeds the final-input limit.
+- Preserved every evidence ID through intermediate reduction and rejected oversized intermediate output.
+- Prevented live long-running workers from being replaced solely because their lock timestamp is older than six hours.
+
 ## 0.1.14 - 2026-07-15
 
 - Added deterministic Codex, Claude, and OpenAI-compatible session-turn normalization with final assistant evidence.

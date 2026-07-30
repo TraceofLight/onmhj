@@ -163,7 +163,7 @@ Deterministically extract the complete reference provenance from raw and include
 
 Include `previousReport` only in the final reduction so regeneration can preserve all prior non-heading lines. Keep the existing final report and reference validators unchanged.
 
-Pass all validated map summaries directly to one final reducer call. A 112 KiB real summary set completed through Codex in about two minutes, while intermediate Claude reductions added latency and unreliable output-size constraints. Keep the final child timeout, and preserve all valid map parts if that final call fails.
+Pass validated map summaries directly to the final reducer only when they fit the final-input bound. Larger sets use the bounded hierarchical reduction defined in [2026-07-30-bounded-hierarchical-reduction-design.md](./2026-07-30-bounded-hierarchical-reduction-design.md). Keep the final child timeout, and preserve all valid map parts if intermediate or final reduction fails.
 
 ## Failure Semantics
 

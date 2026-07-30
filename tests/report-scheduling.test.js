@@ -65,6 +65,16 @@ test('report schedule state accepts injected time', () => {
   assert.equal(state.remoteConfirmedFloor, '');
 });
 
+test('a worker without lock ownership cannot remove another worker lock', () => {
+  const cfg = createConfig();
+  const lock = path.join(cfg.stateDir, 'jobs', 'reports', 'worker.lock');
+  writeJson(lock, { pid: process.pid + 1, ts: new Date().toISOString() });
+
+  onmhj.releaseLock(lock);
+
+  assert.ok(fs.existsSync(lock));
+});
+
 test('autoReport=false prevents SessionStart from creating report jobs', () => {
   const cfg = createConfig();
   childProcess.execFileSync(process.execPath, [
