@@ -89,6 +89,14 @@ test('rejects map references that were not collected in the raw chunk', () => {
   assert.throws(() => validateMapSummary(JSON.stringify(value), chunk), /unsupported reference/);
 });
 
+test('accepts a valid map summary larger than the former intermediate size cap', () => {
+  const [chunk] = chunkRawEvents(rawEvents(1), { targetBytes: 4096 });
+  const value = JSON.parse(summaryFor(chunk));
+  value.tasks[0].background = ['가'.repeat(17 * 1024)];
+
+  assert.doesNotThrow(() => validateMapSummary(JSON.stringify(value), chunk));
+});
+
 test('runs no more than three map subagents concurrently', async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-map-'));
   const raw = rawEvents(12);
@@ -193,7 +201,6 @@ test('reduces validated summaries in bounded batches without dropping evidence I
     language: 'ko',
     summaries,
     targetBytes: 700,
-    maxBytes: 4096,
     async runPrompt(prompt, chunk) {
       calls.push({ prompt, chunk });
       return JSON.stringify({
@@ -219,5 +226,24 @@ test('reduces validated summaries in bounded batches without dropping evidence I
   assert.deepEqual(
     [...new Set(reduced.flatMap(summary => summary.tasks.flatMap(task => task.evidenceIds)))].sort(),
     chunks.flatMap(chunk => chunk.evidenceIds).sort(),
+  );
+});
+
+test('stops reduction when intermediate summaries do not shrink', async () => {
+  const chunks = chunkRawEvents(rawEvents(8), { targetBytes: 1800 });
+  const summaries = chunks.map(chunk => JSON.parse(summaryFor(chunk)));
+
+  await assert.rejects(
+    reduceMapSummaries({
+      date: '2026-07-14',
+      summaries,
+      targetBytes: 700,
+      async runPrompt(_prompt, chunk) {
+        const value = JSON.parse(summaryFor(chunk));
+        value.tasks[0].background = ['가'.repeat(4096)];
+        return JSON.stringify(value);
+      },
+    }),
+    /did not shrink/,
   );
 });
