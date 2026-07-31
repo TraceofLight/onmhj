@@ -601,7 +601,8 @@ test('generates a large report through chunk map and final reduce calls', async 
     date,
     raw,
     {
-      env: {},
+      env: { CLAUDE_PLUGIN_ROOT: 'claude-plugin' },
+      claudeCommand: 'claude-native',
       targetBytes: 1200,
       runAgent(_command, _args, input) {
         prompts.push(input);
@@ -654,7 +655,8 @@ test('bounds the final reducer input with intermediate summary reductions', asyn
     date,
     raw,
     {
-      env: {},
+      env: { CLAUDE_PLUGIN_ROOT: 'claude-plugin' },
+      claudeCommand: 'claude-native',
       targetBytes: 1200,
       runAgent(_command, _args, input) {
         prompts.push(input);
