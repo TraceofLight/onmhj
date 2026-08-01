@@ -47,8 +47,12 @@ node bin/onmhj.js config \
   --owner-email=you@example.com \
   --report-lang=ko \
   --report-auth=agent \
-  --report-agent=auto
+  --report-agent=auto \
+  --report-agent-effort=medium \
+  --report-timeout-minutes=15
 ```
+
+Agent mode 기본 모델은 Claude `sonnet`, Codex `gpt-5.6-terra`다. 선택한 provider의 모델을 바꾸려면 `--report-agent-model=MODEL`을 사용한다.
 
 캡처 상태 확인:
 
@@ -156,8 +160,8 @@ Report repo:
 - 전체 report pipeline은 생성과 검증이 모두 끝난 뒤에만 새 raw, report, confirmation을 쓴다. 기존 report를 재생성할 때는 모든 비제목 줄을 보존해야 하며, 검증에서 거부된 결과는 세 산출물을 모두 변경하지 않는다.
 - prompt/report input과 생성된 output, backend 오류 상세에는 token, password, bearer credential, private key, API key류 패턴에 대한 best-effort redaction을 적용한다.
 - native agent report는 격리된 임시 디렉터리에서 non-interactive로 실행한다. Codex는 user config와 rule을 무시하고 read-only sandbox에서 불필요한 tool을 비활성화한다. Claude Code는 safe mode에서 customization, tool, browser integration, session persistence를 비활성화한다. Evidence는 신뢰할 수 없는 데이터로 취급한다.
-- 각 model 호출은 최대 10분까지 기다리며, 전체 report job에는 별도의 wall-clock 제한이 없다.
-- chunked report generation은 JSONL record나 AI turn의 중간을 자르지 않는다. Map summary는 전달받은 모든 evidence ID를 포함해야 하며, invalid part만 한 번 재시도하고 valid part는 cache에서 재사용한다.
+- 각 model 호출은 기본 15분까지 기다리며 설정으로 변경할 수 있다. 전체 report job에는 별도의 wall-clock 제한이 없다.
+- chunked report generation은 JSONL record나 AI turn의 중간을 자르지 않는다. Map summary는 전달받은 모든 evidence ID를 포함해야 하며, invalid part만 validation 사유와 함께 최대 두 번 재시도하고 valid part는 cache에서 재사용한다.
 - POSIX 호환 파일시스템에서는 재시도용 report-part 디렉터리와 파일 권한을 각각 `0700`, `0600`으로 설정해 현재 사용자만 읽고 쓸 수 있게 한다.
 - report repo에 이미 staged change가 있으면 자동 발행을 거부하며 repo 전체 publication lock을 사용한다.
 - report local date는 설정 timezone 기준이고, event spool 파일명은 UTC 기준이다.

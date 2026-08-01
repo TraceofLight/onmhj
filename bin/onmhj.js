@@ -21,7 +21,12 @@ const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 const EVENT_SPOOL_LOCK_TIMEOUT_MS = 10 * 1000;
 const LOCK_RETRY_MS = 25;
 const LOCK_WAIT = new Int32Array(new SharedArrayBuffer(4));
-const REPORT_BACKEND_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_REPORT_AGENT_EFFORT = 'medium';
+const DEFAULT_REPORT_TIMEOUT_MINUTES = 15;
+const DEFAULT_REPORT_AGENT_MODELS = {
+  claude: 'sonnet',
+  codex: 'gpt-5.6-terra',
+};
 const SESSION_PARSER_VERSION = 6;
 const PRIVATE_REFERENCE_HOSTS = new net.BlockList();
 for (const [network, prefix, type] of [
@@ -55,7 +60,7 @@ function usage() {
     'Usage:',
     '  onmhj hook <event>',
     '  onmhj register <git-repo-path> [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude]',
-    '  onmhj config [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
+    '  onmhj config [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude] [--report-agent-model=MODEL] [--report-agent-effort=low|medium|high] [--report-timeout-minutes=N] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj sessions [--publish] [--no-push]',
@@ -93,6 +98,9 @@ function config() {
     reportLanguage: cfg.reportLanguage || userLanguage(),
     reportAuth: cfg.reportAuth || 'agent',
     reportAgent: cfg.reportAgent || 'auto',
+    reportAgentModel: cfg.reportAgentModel || '',
+    reportAgentEffort: cfg.reportAgentEffort || DEFAULT_REPORT_AGENT_EFFORT,
+    reportTimeoutMinutes: cfg.reportTimeoutMinutes || DEFAULT_REPORT_TIMEOUT_MINUTES,
     reportApiBaseUrl: cfg.reportApiBaseUrl || '',
     reportApiModel: cfg.reportApiModel || '',
     reportApiKeyEnv: cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV,
@@ -377,6 +385,9 @@ function parseOptions(args) {
     if (arg.startsWith('--report-lang=')) opts.reportLanguage = arg.slice('--report-lang='.length);
     if (arg.startsWith('--report-auth=')) opts.reportAuth = arg.slice('--report-auth='.length);
     if (arg.startsWith('--report-agent=')) opts.reportAgent = arg.slice('--report-agent='.length);
+    if (arg.startsWith('--report-agent-model=')) opts.reportAgentModel = arg.slice('--report-agent-model='.length);
+    if (arg.startsWith('--report-agent-effort=')) opts.reportAgentEffort = arg.slice('--report-agent-effort='.length);
+    if (arg.startsWith('--report-timeout-minutes=')) opts.reportTimeoutMinutes = arg.slice('--report-timeout-minutes='.length);
     if (arg.startsWith('--report-api-base=')) opts.reportApiBaseUrl = arg.slice('--report-api-base='.length);
     if (arg.startsWith('--report-model=')) opts.reportApiModel = arg.slice('--report-model='.length);
     if (arg.startsWith('--report-api-key-env=')) opts.reportApiKeyEnv = arg.slice('--report-api-key-env='.length);
@@ -434,13 +445,19 @@ function validateConfigOptions(opts) {
   if (opts.reportAgent && !['auto', 'codex', 'claude'].includes(opts.reportAgent)) {
     throw new Error('report agent must be auto, codex, or claude');
   }
+  if (opts.reportAgentEffort && !['low', 'medium', 'high'].includes(opts.reportAgentEffort)) {
+    throw new Error('report agent effort must be low, medium, or high');
+  }
+  if (opts.reportTimeoutMinutes && !/^[1-9]\d*$/.test(opts.reportTimeoutMinutes)) {
+    throw new Error('report timeout minutes must be a positive integer');
+  }
   if (opts.autoReport !== undefined && !['true', 'false'].includes(opts.autoReport)) {
     throw new Error('auto report must be true or false');
   }
   if (opts.reportLanguage && !['en', 'ko'].includes(opts.reportLanguage)) {
     throw new Error('report language must be en or ko');
   }
-  for (const key of ['reportApiBaseUrl', 'reportApiModel', 'reportApiKeyEnv']) {
+  for (const key of ['reportAgentModel', 'reportApiBaseUrl', 'reportApiModel', 'reportApiKeyEnv']) {
     if (opts[key] && /[\r\n]/.test(opts[key])) throw new Error(`${key} must be a single line`);
   }
   for (const key of ['ownerName', 'ownerEmail']) {
@@ -466,6 +483,9 @@ function applyReportConfig(cfg, opts) {
   if (opts.reportLanguage) cfg.reportLanguage = opts.reportLanguage;
   if (opts.reportAuth) cfg.reportAuth = opts.reportAuth;
   if (opts.reportAgent) cfg.reportAgent = opts.reportAgent;
+  if (opts.reportAgentModel) cfg.reportAgentModel = opts.reportAgentModel;
+  if (opts.reportAgentEffort) cfg.reportAgentEffort = opts.reportAgentEffort;
+  if (opts.reportTimeoutMinutes) cfg.reportTimeoutMinutes = Number(opts.reportTimeoutMinutes);
   if (opts.reportApiBaseUrl) cfg.reportApiBaseUrl = opts.reportApiBaseUrl;
   if (opts.reportApiModel) cfg.reportApiModel = opts.reportApiModel;
   if (opts.reportApiKeyEnv) cfg.reportApiKeyEnv = opts.reportApiKeyEnv;
@@ -481,16 +501,21 @@ function reportRuntime(cfg) {
       hasApiKey: Boolean(process.env[cfg.reportApiKeyEnv]),
     };
   }
+  const provider = nativeAgentProvider(cfg);
   return {
     auth: 'agent',
     agent: cfg.reportAgent,
+    provider,
+    model: reportAgentModel(cfg, provider),
+    effort: reportAgentEffort(cfg),
+    timeoutMinutes: reportBackendTimeoutMs(cfg) / 60 / 1000,
     description: `Use local ${cfg.reportAgent === 'auto' ? 'runtime-native' : cfg.reportAgent} authentication for isolated final report generation.`,
   };
 }
 
 function configure(opts) {
   validateConfigOptions(opts);
-  if (!opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportAgent && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
+  if (!opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportAgent && !opts.reportAgentModel && !opts.reportAgentEffort && !opts.reportTimeoutMinutes && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
     throw new Error(usage());
   }
   const cfg = config();
@@ -509,8 +534,11 @@ function configure(opts) {
     reportLanguage: cfg.reportLanguage,
     reportAuth: cfg.reportAuth,
     reportAgent: cfg.reportAgent,
+    reportAgentModel: cfg.reportAgentModel,
+    reportAgentEffort: cfg.reportAgentEffort,
+    reportTimeoutMinutes: cfg.reportTimeoutMinutes,
   });
-  process.stdout.write(`configured timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} autoReport=${cfg.autoReport} reportLanguage=${cfg.reportLanguage} reportAuth=${cfg.reportAuth} reportAgent=${cfg.reportAgent}\n`);
+  process.stdout.write(`configured timeZone=${cfg.timeZone} deviceId=${cfg.deviceId} autoReport=${cfg.autoReport} reportLanguage=${cfg.reportLanguage} reportAuth=${cfg.reportAuth} reportAgent=${cfg.reportAgent} reportAgentModel=${cfg.reportAgentModel || '(default)'} reportAgentEffort=${cfg.reportAgentEffort} reportTimeoutMinutes=${cfg.reportTimeoutMinutes}\n`);
 }
 
 function eventDedupeKey(event) {
@@ -1655,6 +1683,18 @@ function nativeAgentProvider(cfg, env = process.env) {
   return env.CLAUDE_PLUGIN_ROOT ? 'claude' : 'codex';
 }
 
+function reportAgentModel(cfg, provider) {
+  return cfg.reportAgentModel || DEFAULT_REPORT_AGENT_MODELS[provider];
+}
+
+function reportAgentEffort(cfg) {
+  return cfg.reportAgentEffort || DEFAULT_REPORT_AGENT_EFFORT;
+}
+
+function reportBackendTimeoutMs(cfg) {
+  return (cfg.reportTimeoutMinutes || DEFAULT_REPORT_TIMEOUT_MINUTES) * 60 * 1000;
+}
+
 function resolveClaudeExecutable(env = process.env) {
   return env.ONMHJ_CLAUDE_EXECUTABLE || 'claude';
 }
@@ -1696,7 +1736,7 @@ async function callReportBackend(cfg, prompt, deps = {}) {
       {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(REPORT_BACKEND_TIMEOUT_MS),
+        signal: AbortSignal.timeout(reportBackendTimeoutMs(cfg)),
       },
       { model: cfg.reportApiModel, messages: [{ role: 'user', content: prompt }] },
     );
@@ -1708,11 +1748,15 @@ async function callReportBackend(cfg, prompt, deps = {}) {
   const callAgent = deps.runAgent || runAgent;
   const env = deps.env || process.env;
   const provider = nativeAgentProvider(cfg, env);
+  const model = reportAgentModel(cfg, provider);
+  const effort = reportAgentEffort(cfg);
   let command = deps.codexCommand;
   if (!command && provider === 'codex') command = resolveCodexExecutable(env);
   let args = [
     'exec',
     '--ignore-user-config',
+    '--model',
+    model,
     '--ignore-rules',
     '--ephemeral',
     '--skip-git-repo-check',
@@ -1734,23 +1778,28 @@ async function callReportBackend(cfg, prompt, deps = {}) {
     'tools.view_image=false',
     '-c',
     'tools.web_search=false',
+    '-c',
+    `model_reasoning_effort="${effort}"`,
     '-',
   ];
   if (provider === 'claude') {
     command = deps.claudeCommand || resolveClaudeExecutable(env);
-    args = ['-p', '--safe-mode', '--tools', '', '--no-session-persistence', '--no-chrome', '--output-format', 'text'];
+    args = ['-p', '--safe-mode', '--tools', '', '--no-session-persistence', '--no-chrome', '--model', model, '--effort', effort, '--output-format', 'text'];
   }
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-report-agent-'));
   let result;
   try {
-    const options = { cwd, timeout: REPORT_BACKEND_TIMEOUT_MS, windowsHide: true };
+    const options = { cwd, timeout: reportBackendTimeoutMs(cfg), windowsHide: true };
     if (provider === 'claude') options.env = claudeAgentEnvironment(env);
     result = await callAgent(command, args, prompt, options);
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
   }
   if (!result || result.status !== 0) {
-    const detail = result && (result.stderr || result.stdout || (result.error && result.error.message));
+    const timedOut = result && result.error && result.error.code === 'ETIMEDOUT';
+    const detail = result && (timedOut
+      ? result.error.message
+      : result.stderr || result.stdout || (result.error && result.error.message));
     throw new Error(`report agent failed: ${redactSecrets(detail || 'unknown error')}`.trim());
   }
   return result.stdout;
@@ -2100,6 +2149,10 @@ function status() {
     `reportLanguage: ${cfg.reportLanguage}`,
     `reportAuth: ${report.auth}`,
     `reportAgent: ${cfg.reportAgent}`,
+    `reportAgentProvider: ${report.auth === 'agent' ? report.provider : '(inactive)'}`,
+    `reportAgentModel: ${report.auth === 'agent' ? report.model : '(inactive)'}`,
+    `reportAgentEffort: ${report.auth === 'agent' ? report.effort : '(inactive)'}`,
+    `reportTimeoutMinutes: ${cfg.reportTimeoutMinutes}`,
     `reportApiBase: ${cfg.reportApiBaseUrl || '(unset)'}`,
     `reportModel: ${cfg.reportApiModel || '(unset)'}`,
     `reportApiKeyEnv: ${cfg.reportApiKeyEnv}`,
@@ -2241,6 +2294,11 @@ async function selftest() {
   if (config().reportLanguage !== 'en') throw new Error('report language config failed');
   configure({ reportAgent: 'codex' });
   if (config().reportAgent !== 'codex') throw new Error('report agent config failed');
+  configure({ reportAgentModel: 'test-agent-model', reportAgentEffort: 'low', reportTimeoutMinutes: '20' });
+  const agentCfg = config();
+  if (agentCfg.reportAgentModel !== 'test-agent-model' || agentCfg.reportAgentEffort !== 'low' || agentCfg.reportTimeoutMinutes !== 20) {
+    throw new Error('report agent runtime config failed');
+  }
   configure({ ownerName: 'onmhj-owner', ownerEmail: 'owner@example.local' });
   const ownerCfg = config();
   if (ownerCfg.ownerName !== 'onmhj-owner' || ownerCfg.ownerEmail !== 'owner@example.local') {

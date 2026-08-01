@@ -17,6 +17,8 @@ const simpleRaw = JSON.stringify({
 const codexAgentArgs = [
   'exec',
   '--ignore-user-config',
+  '--model',
+  'gpt-5.6-terra',
   '--ignore-rules',
   '--ephemeral',
   '--skip-git-repo-check',
@@ -38,6 +40,8 @@ const codexAgentArgs = [
   'tools.view_image=false',
   '-c',
   'tools.web_search=false',
+  '-c',
+  'model_reasoning_effort="medium"',
   '-',
 ];
 
@@ -381,11 +385,15 @@ test('generates a validated report with Claude agent auth', async () => {
     '',
     '--no-session-persistence',
     '--no-chrome',
+    '--model',
+    'sonnet',
+    '--effort',
+    'medium',
     '--output-format',
     'text',
   ]);
   assert.match(invocation.input, /implemented automatic reports/);
-  assert.equal(invocation.options.timeout, 10 * 60 * 1000);
+  assert.equal(invocation.options.timeout, 15 * 60 * 1000);
   assert.equal(invocation.options.windowsHide, true);
   assert.notEqual(invocation.options.env, env);
   assert.deepEqual(invocation.options.env, {
@@ -420,22 +428,31 @@ test('uses ONMHJ_CLAUDE_EXECUTABLE for Claude agent auth', async () => {
 });
 
 test('uses configured Codex agent inside the Claude plugin runtime', async () => {
-  let invokedCommand;
+  let invocation;
   await onmhj.generateReport(
-    { reportAuth: 'agent', reportAgent: 'codex' },
+    {
+      reportAuth: 'agent',
+      reportAgent: 'codex',
+      reportAgentModel: 'custom-codex-model',
+      reportAgentEffort: 'high',
+      reportTimeoutMinutes: 20,
+    },
     date,
     simpleRaw,
     {
       env: { CLAUDE_PLUGIN_ROOT: 'claude-plugin' },
       codexCommand: 'codex-native',
-      runAgent(command) {
-        invokedCommand = command;
+      runAgent(command, args, _input, options) {
+        invocation = { command, args, options };
         return { status: 0, stdout: validReport(), stderr: '' };
       },
     },
   );
 
-  assert.equal(invokedCommand, 'codex-native');
+  assert.equal(invocation.command, 'codex-native');
+  assert.ok(invocation.args.includes('custom-codex-model'));
+  assert.ok(invocation.args.includes('model_reasoning_effort="high"'));
+  assert.equal(invocation.options.timeout, 20 * 60 * 1000);
 });
 
 test('generates a validated report with OpenAI-compatible API auth', async () => {
@@ -565,6 +582,19 @@ test('surfaces Codex process launch errors', async () => {
   );
 });
 
+test('reports agent timeouts instead of generic process output', async () => {
+  const timeout = Object.assign(new Error('spawn claude ETIMEDOUT'), { code: 'ETIMEDOUT' });
+  await assert.rejects(
+    () => onmhj.generateReport(
+      { reportAuth: 'agent' },
+      date,
+      simpleRaw,
+      { runAgent: () => ({ status: 143, stdout: 'Execution error', stderr: '', error: timeout }) },
+    ),
+    /spawn claude ETIMEDOUT/,
+  );
+});
+
 test('redacts credential-like values from generated reports', async () => {
   const generated = validReport().replace('검증 완료', 'token=super-secret-report-value 검증 완료');
 
@@ -671,7 +701,7 @@ test('bounds the final reducer input with intermediate summary reductions', asyn
             chunkId: metadata.chunkId,
             tasks: [{
               title: intermediate ? `병합 ${metadata.index}` : `청크 ${metadata.index}`,
-              background: intermediate ? [] : ['가'.repeat(12000)],
+              background: intermediate ? [] : ['가'.repeat(7000)],
               process: [],
               decisions: [],
               results: [],
@@ -688,7 +718,7 @@ test('bounds the final reducer input with intermediate summary reductions', asyn
   assert.ok(prompts.some(prompt => prompt.includes('retain every supplied evidence ID')));
   const finalPrompt = prompts.find(prompt => prompt.includes('--- validated chunk summaries JSONL ---'));
   assert.ok(finalPrompt);
-  assert.ok(Buffer.byteLength(finalPrompt) < 96 * 1024 + 8 * 1024);
+  assert.ok(Buffer.byteLength(finalPrompt) < 64 * 1024 + 8 * 1024);
 });
 
 test('full pipeline commits raw, report, and confirmation without daily evidence', async () => {

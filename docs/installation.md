@@ -105,14 +105,19 @@ node /path/to/onmhj/bin/onmhj.js config \
 Automatic final report generation uses the active plugin runtime's local authentication:
 
 ```sh
-node /path/to/onmhj/bin/onmhj.js config --report-lang=ko --report-auth=agent --report-agent=auto
+node /path/to/onmhj/bin/onmhj.js config \
+  --report-lang=ko \
+  --report-auth=agent \
+  --report-agent=auto \
+  --report-agent-effort=medium \
+  --report-timeout-minutes=15
 ```
 
-`report-lang` controls the final report contract (`ko` or `en`). It defaults from the user's locale when unset. `report-agent=auto` selects the active plugin runtime's local login; use `codex` or `claude` to override it. Set `ONMHJ_CLAUDE_EXECUTABLE` or `ONMHJ_CODEX_EXECUTABLE` to override the selected executable.
+`report-lang` controls the final report contract (`ko` or `en`). It defaults from the user's locale when unset. `report-agent=auto` selects the active plugin runtime's local login; use `codex` or `claude` to override it. Claude defaults to the stable `sonnet` alias and Codex defaults to `gpt-5.6-terra`; use `--report-agent-model=MODEL` when the provider changes its model names. Agent effort defaults to `medium`. Set `ONMHJ_CLAUDE_EXECUTABLE` or `ONMHJ_CODEX_EXECUTABLE` to override the selected executable.
 
-Agent mode runs non-interactively in an isolated temporary directory. Claude Code disables customizations, tools, browser integration, and session persistence; Codex ignores user configuration and rules and uses a read-only sandbox with report-irrelevant tools disabled. Each native-agent or API model call has its own 10-minute timeout; the full report job has no single wall-clock deadline.
+Agent mode runs non-interactively in an isolated temporary directory. Claude Code disables customizations, tools, browser integration, and session persistence; Codex ignores user configuration and rules and uses a read-only sandbox with report-irrelevant tools disabled. Each native-agent or API model call has its own configurable 15-minute timeout; the full report job has no single wall-clock deadline.
 
-Large raw inputs are split on complete JSONL records into session-preserving 20 KiB chunks, processed with concurrency three, and cached for retry. If validated map summaries exceed the 96 KiB final-input bound, they are merged in bounded intermediate batches before the final reducer call. Every supplied evidence ID must be covered by each validated intermediate summary chain. On POSIX-compatible filesystems, part-cache directories and files use modes `0700` and `0600`.
+Large raw inputs are split on complete JSONL records into session-preserving 20 KiB chunks, processed with concurrency three, and cached for retry. If validated map summaries exceed the 64 KiB final-input bound, they are merged in bounded intermediate batches before the final reducer call. Every supplied evidence ID must be covered by each validated intermediate summary chain. On POSIX-compatible filesystems, part-cache directories and files use modes `0700` and `0600`.
 
 API mode is shared by both plugin runtimes and requires explicit configuration:
 

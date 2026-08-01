@@ -5,6 +5,12 @@
 - Bounded final report reduction with validated intermediate summaries when map output exceeds the final-input limit.
 - Preserved every evidence ID through intermediate reduction and rejected oversized intermediate output.
 - Prevented live long-running workers from being replaced solely because their lock timestamp is older than six hours.
+- Pinned agent reports to Claude `sonnet` or Codex `gpt-5.6-terra` with medium effort by default, added model and timeout overrides, and increased the per-call timeout to 15 minutes.
+- Preserved explicit timeout errors instead of replacing them with generic native-agent output.
+- Reduced intermediate agent input to 64 KiB and accepted a single outer JSON fence for reliable schema validation.
+- Added one validation-guided retry for intermittent malformed map-summary output.
+- Re-compressed oversized atomic summaries instead of failing before a reduction attempt.
+- Enforced a shrinking byte limit on each intermediate summary and fed violations back into retries.
 
 ## 0.1.14 - 2026-07-15
 

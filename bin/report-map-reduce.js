@@ -5,9 +5,9 @@ const path = require('node:path');
 const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
 
 const MAP_CONCURRENCY = 3;
-const MAP_ATTEMPTS = 2;
+const MAP_ATTEMPTS = 3;
 const MAP_PROMPT_VERSION = 3;
-const REDUCE_INPUT_BYTES = 96 * 1024;
+const REDUCE_INPUT_BYTES = 64 * 1024;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -23,6 +23,7 @@ function buildMapPrompt(date, language, chunk, options = {}) {
     ...(intermediate ? [
       'Merge related tasks, but retain every supplied evidence ID and every distinct confirmed fact.',
       'Prefer short fact bullets over repeated prose.',
+      `Keep the returned UTF-8 JSON under ${chunk.maxOutputBytes} bytes. Compress wording aggressively to fit.`,
     ] : []),
     `Work date: ${date}`,
     `Chunk ID: ${chunk.chunkId}`,
@@ -57,12 +58,19 @@ function stringArray(value, label) {
 function validateMapSummary(output, chunk) {
   let value;
   try {
-    value = JSON.parse(String(output || '').trim());
+    const text = String(output || '').trim();
+    const json = text.startsWith('```') && text.endsWith('```')
+      ? text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+      : text;
+    value = JSON.parse(json);
   } catch {
     throw new Error(`map summary is invalid JSON for chunk ${chunk.index}`);
   }
   if (!value || value.schemaVersion !== 1 || value.chunkId !== chunk.chunkId || !Array.isArray(value.tasks)) {
     throw new Error(`map summary contract mismatch for chunk ${chunk.index}`);
+  }
+  if (chunk.maxOutputBytes && Buffer.byteLength(JSON.stringify(value)) >= chunk.maxOutputBytes) {
+    throw new Error(`map summary must be under ${chunk.maxOutputBytes} bytes for chunk ${chunk.index}`);
   }
   const allowed = new Set(chunk.evidenceIds);
   const allowedReferences = new Set(chunk.referenceUrls);
@@ -112,12 +120,14 @@ async function mapLimit(items, limit, mapper) {
 
 async function runValidatedPrompt(runPrompt, prompt, chunk) {
   let lastError;
+  let retryPrompt = prompt;
   for (let attempt = 0; attempt < MAP_ATTEMPTS; attempt += 1) {
     try {
-      const summary = validateMapSummary(await runPrompt(prompt, chunk), chunk);
+      const summary = validateMapSummary(await runPrompt(retryPrompt, chunk), chunk);
       return summary;
     } catch (error) {
       lastError = error;
+      retryPrompt = `${prompt}\n\nPrevious output failed validation: ${error.message}\nReturn corrected JSON only, without commentary.`;
     }
   }
   throw lastError;
@@ -149,8 +159,9 @@ function summaryChunk(summaries, index, count) {
   const evidenceIds = [...new Set(summaries.flatMap(summary => summary.tasks.flatMap(task => task.evidenceIds)))];
   const referenceUrls = [...new Set(summaries.flatMap(summary => summary.tasks.flatMap(task => task.references.map(reference => reference.url))))];
   const raw = summaries.map(summary => JSON.stringify(summary)).join('\n') + '\n';
+  const bytes = Buffer.byteLength(raw);
   return {
-    bytes: Buffer.byteLength(raw),
+    bytes,
     chunkId: `sha256:${sha256(raw)}`,
     count,
     evidenceIds,
@@ -173,11 +184,9 @@ async function reduceMapSummaries(options) {
   while (summaryBytes(reduced) > targetBytes) {
     const beforeBytes = summaryBytes(reduced);
     const groups = summaryChunks(reduced, targetBytes);
-    if (groups.length === reduced.length) {
-      throw new Error(`map summary exceeds reduction input limit: ${targetBytes} bytes`);
-    }
     reduced = await mapLimit(groups, MAP_CONCURRENCY, async (group, index) => {
       const chunk = summaryChunk(group, index, groups.length);
+      chunk.maxOutputBytes = Math.min(targetBytes, chunk.bytes);
       return runValidatedPrompt(
         runPrompt,
         buildMapPrompt(date, language, chunk, { intermediate: true }),

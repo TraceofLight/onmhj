@@ -21,7 +21,7 @@ raw evidence
   -> final report reducer
 ```
 
-The runtime serializes map summaries and measures UTF-8 bytes. When they exceed 96 KiB, it groups adjacent summaries into batches no larger than that target and asks the same configured backend to merge each batch into one validated map-summary object. Each intermediate response is capped at 16 KiB. Repeat until the final reducer input is within the 96 KiB target.
+The runtime serializes map summaries and measures UTF-8 bytes. When they exceed 64 KiB, it groups adjacent summaries into batches near that target and asks the same configured backend to merge each batch into one validated map-summary object. Each intermediate output must be smaller than its input batch and remain under 64 KiB. An oversized atomic summary is re-compressed alone. Repeat until the final reducer input is within the target.
 
 No user setting is added. Claude, Codex, and API backends share this path.
 

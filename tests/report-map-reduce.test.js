@@ -97,6 +97,12 @@ test('accepts a valid map summary larger than the former intermediate size cap',
   assert.doesNotThrow(() => validateMapSummary(JSON.stringify(value), chunk));
 });
 
+test('accepts a valid map summary wrapped in a Markdown JSON fence', () => {
+  const [chunk] = chunkRawEvents(rawEvents(1), { targetBytes: 4096 });
+
+  assert.doesNotThrow(() => validateMapSummary(`\`\`\`json\n${summaryFor(chunk)}\n\`\`\``, chunk));
+});
+
 test('runs no more than three map subagents concurrently', async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-map-'));
   const raw = rawEvents(12);
@@ -156,9 +162,10 @@ test('reuses valid cached parts and regenerates only a corrupt part', async () =
   assert.equal(calls, 1);
 });
 
-test('retries only a part whose first output fails validation', async () => {
+test('retries only an invalid part with validation feedback', async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-map-retry-'));
   const attempts = new Map();
+  const prompts = new Map();
 
   const result = await mapRawEvidence({
     date: '2026-07-14',
@@ -166,16 +173,18 @@ test('retries only a part whose first output fails validation', async () => {
     raw: rawEvents(6),
     stateDir,
     targetBytes: 1800,
-    async runPrompt(_prompt, chunk) {
+    async runPrompt(prompt, chunk) {
       const count = (attempts.get(chunk.index) || 0) + 1;
       attempts.set(chunk.index, count);
-      if (chunk.index === 1 && count === 1) return 'temporary invalid output';
+      prompts.set(chunk.index, [...(prompts.get(chunk.index) || []), prompt]);
+      if (chunk.index === 1 && count < 3) return 'temporary invalid output';
       return summaryFor(chunk);
     },
   });
 
-  assert.equal(attempts.get(1), 2);
-  assert.ok([...attempts].every(([index, count]) => count === (index === 1 ? 2 : 1)));
+  assert.equal(attempts.get(1), 3);
+  assert.match(prompts.get(1)[1], /Previous output failed validation: map summary is invalid JSON/);
+  assert.ok([...attempts].every(([index, count]) => count === (index === 1 ? 3 : 1)));
   assert.equal(result.summaries.length, result.chunks.length);
 });
 
@@ -229,7 +238,26 @@ test('reduces validated summaries in bounded batches without dropping evidence I
   );
 });
 
-test('stops reduction when intermediate summaries do not shrink', async () => {
+test('recompresses an oversized atomic summary', async () => {
+  const [chunk] = chunkRawEvents(rawEvents(1), { targetBytes: 4096 });
+  const summary = JSON.parse(summaryFor(chunk));
+  summary.tasks[0].background = ['가'.repeat(1000)];
+
+  const reduced = await reduceMapSummaries({
+    date: '2026-07-14',
+    summaries: [summary],
+    targetBytes: 1000,
+    async runPrompt(prompt, intermediateChunk) {
+      assert.match(prompt, /Keep the returned UTF-8 JSON under 1000 bytes/);
+      return summaryFor(intermediateChunk);
+    },
+  });
+
+  assert.ok(summaryBytes(reduced) <= 1000);
+  assert.deepEqual(reduced[0].tasks[0].evidenceIds, chunk.evidenceIds);
+});
+
+test('rejects intermediate summaries that exceed the shrinking output limit', async () => {
   const chunks = chunkRawEvents(rawEvents(8), { targetBytes: 1800 });
   const summaries = chunks.map(chunk => JSON.parse(summaryFor(chunk)));
 
@@ -244,6 +272,6 @@ test('stops reduction when intermediate summaries do not shrink', async () => {
         return JSON.stringify(value);
       },
     }),
-    /did not shrink/,
+    /map summary must be under/,
   );
 });

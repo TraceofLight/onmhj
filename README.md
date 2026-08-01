@@ -47,8 +47,12 @@ node bin/onmhj.js config \
   --owner-email=you@example.com \
   --report-lang=ko \
   --report-auth=agent \
-  --report-agent=auto
+  --report-agent=auto \
+  --report-agent-effort=medium \
+  --report-timeout-minutes=15
 ```
+
+Agent mode defaults to `sonnet` for Claude and `gpt-5.6-terra` for Codex. Use `--report-agent-model=MODEL` to override the selected provider's model.
 
 Check capture status:
 
@@ -156,8 +160,8 @@ A date is confirmed only after its final report passes validation and raw, repor
 - Full report generation writes new raw, report, and confirmation artifacts only after generation and validation succeed. Regeneration must also preserve every prior non-heading report line; rejected output leaves all three artifacts unchanged.
 - Prompt/report inputs, generated output, and backend failure details get best-effort redaction for token, password, bearer credential, private-key, and API-key-like patterns.
 - Native agent reports run non-interactively in an isolated temporary directory. Codex ignores user configuration and rules and runs in a read-only sandbox with report-irrelevant tools disabled. Claude Code runs in safe mode with customizations, tools, browser integration, and session persistence disabled. Evidence is treated as untrusted data.
-- Every model call has its own 10-minute timeout; the full report job has no single wall-clock deadline.
-- Chunked report generation never splits a JSONL record or AI turn. A map summary must cover every supplied evidence ID; an invalid part is retried once, while valid parts are reused from cache.
+- Every model call has its own configurable 15-minute timeout; the full report job has no single wall-clock deadline.
+- Chunked report generation never splits a JSONL record or AI turn. A map summary must cover every supplied evidence ID; an invalid part is retried up to twice with validation feedback, while valid parts are reused from cache.
 - On POSIX-compatible filesystems, resumable report-part directories and files are restricted to the current user with modes `0700` and `0600`.
 - Automatic publication refuses to run when the report repository already has staged changes and uses a repository-wide publication lock.
 - Local report dates use the configured timezone; event spool filenames use UTC.
