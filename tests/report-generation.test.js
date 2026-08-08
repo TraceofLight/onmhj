@@ -218,6 +218,26 @@ test('validates the optional reference section against collected evidence', () =
   );
 });
 
+test('completes missing references in the final task reference section', () => {
+  const references = [
+    { title: '첫 자료', url: 'https://example.com/first' },
+    { title: '둘째 자료', url: 'https://example.com/second' },
+  ];
+
+  const repaired = onmhj.completeReportReferences(
+    reportWithReferences(references[0].url),
+    references,
+    'ko',
+  );
+
+  assert.match(repaired, /https:\/\/example\.com\/first/);
+  assert.match(repaired, /https:\/\/example\.com\/second/);
+  assert.equal(
+    onmhj.validateReport(repaired, date, 'ko', '', references, { requireTaskFormat: true }),
+    repaired.trimEnd() + '\n',
+  );
+});
+
 test('accepts a report with the exact work-date heading and required sections', () => {
   assert.equal(onmhj.validateReport(validReport(), date), validReport());
   assert.equal(onmhj.validateReport(legacyReport(), date), legacyReport());
@@ -942,7 +962,7 @@ test('worker waits without failing jobs while another publication holds the repo
   assert.equal(job.attempts, 0);
 });
 
-test('ejmhj preserves ordered retries before confirming a later work date', async () => {
+test('ejmhj processes later work while an earlier retry is delayed', async () => {
   const cfg = createRuntime();
   const earlierDate = '2026-07-10';
   fs.writeFileSync(path.join(cfg.stateDir, 'events', `${earlierDate}.jsonl`), JSON.stringify({
@@ -972,7 +992,7 @@ test('ejmhj preserves ordered retries before confirming a later work date', asyn
   const delay = await onmhj.runEjmhj(cfg, date, options);
 
   assert.ok(delay > 0);
-  assert.equal(fs.existsSync(path.join(cfg.repoPath, 'reports', `${date}.md`)), false);
+  assert.equal(fs.existsSync(path.join(cfg.repoPath, 'reports', `${date}.md`)), true);
   assert.equal(fs.existsSync(path.join(jobsDir, 'confirmed.json')), false);
 
   const earlierJob = JSON.parse(fs.readFileSync(earlierJobFile, 'utf8'));

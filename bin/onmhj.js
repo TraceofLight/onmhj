@@ -1257,6 +1257,16 @@ function hasValidReport(cfg, date) {
   }
 }
 
+function contiguousReportThrough(cfg, date) {
+  const floor = confirmedFloor(cfg);
+  let through = floor;
+  for (const candidate of reportCandidateDates(cfg, date).filter(item => item > floor && item <= date)) {
+    if (!hasValidReport(cfg, candidate)) break;
+    through = candidate;
+  }
+  return through > floor ? through : '';
+}
+
 function shouldScheduleReportDate(cfg, date, state) {
   if (!hasValidReport(cfg, date)) return true;
   return !state.localConfirmedThrough || date > state.localConfirmedThrough;
@@ -1594,6 +1604,33 @@ function validateTaskReport(report, contract, references) {
       throw new Error('report reference must be inside a task reference section');
     }
   }
+}
+
+function completeReportReferences(report, references, language = 'ko') {
+  const allowedReferences = mergeReferences(references);
+  const missing = allowedReferences.filter(reference => {
+    return !extractExternalReferences(report).some(item => item.url === reference.url);
+  });
+  if (!missing.length) return report;
+
+  const taskMatches = [...String(report).matchAll(/^### T\d+\. .+$/gm)];
+  if (!taskMatches.length) return report;
+
+  const contract = reportContract(language);
+  const taskStart = taskMatches.at(-1).index;
+  const nextTopSection = String(report).slice(taskStart).search(/\n## /);
+  const taskEnd = nextTopSection === -1 ? String(report).length : taskStart + nextTopSection;
+  const task = String(report).slice(taskStart, taskEnd).replace(/\s+$/, '');
+  const marker = `#### ${contract.references}`;
+  const lines = missing.map(reference => {
+    const title = String(reference.title || reference.url).replace(/[\r\n]+/g, ' ').replace(/]/g, '\\]');
+    return `- [${title}](${reference.url})`;
+  });
+  const markerIndex = task.indexOf(`\n${marker}\n`);
+  const repairedTask = markerIndex === -1
+    ? `${task}\n\n${marker}\n\n${lines.join('\n')}`
+    : `${task}\n${lines.join('\n')}`;
+  return `${String(report).slice(0, taskStart)}${repairedTask}${String(report).slice(taskEnd)}`;
 }
 
 function validateReport(value, date, language = 'ko', previousReport = '', references = [], options = {}) {
@@ -1966,8 +2003,9 @@ async function runFullReportUnlocked(cfg, date, opts = {}) {
   const reportTarget = path.join(cfg.repoPath, 'reports', date + '.md');
   const previousReport = fs.existsSync(reportTarget) ? fs.readFileSync(reportTarget, 'utf8') : '';
   const references = rawReferences(prepared.raw);
+  const generatedReport = await createReport(cfg, date, prepared.raw, { previousReport });
   const report = validateReport(
-    await createReport(cfg, date, prepared.raw, { previousReport }),
+    completeReportReferences(generatedReport, references, cfg.reportLanguage),
     date,
     cfg.reportLanguage,
     previousReport,
@@ -1978,15 +2016,19 @@ async function runFullReportUnlocked(cfg, date, opts = {}) {
   fs.writeFileSync(prepared.rawTarget, prepared.raw);
   fs.mkdirSync(path.dirname(reportTarget), { recursive: true });
   fs.writeFileSync(reportTarget, report);
-  const confirmTarget = opts.noPush ? '' : writeDeviceConfirmation(cfg, date);
+  const localConfirmedThrough = readLocalConfirmation(cfg).confirmedThrough || '';
+  const confirmationThrough = opts.noPush
+    ? ''
+    : (contiguousReportThrough(cfg, date) || (localConfirmedThrough && date <= localConfirmedThrough ? localConfirmedThrough : ''));
+  const confirmTarget = confirmationThrough ? writeDeviceConfirmation(cfg, confirmationThrough) : '';
   commitArtifacts(
     cfg,
     date,
     [prepared.rawTarget, reportTarget, ...(confirmTarget ? [confirmTarget] : [])],
     opts,
   );
-  if (!opts.noPush) {
-    writeLocalConfirmation(cfg, date);
+  if (!opts.noPush && confirmationThrough) {
+    writeLocalConfirmation(cfg, confirmationThrough);
     cleanupMapCache(cfg.stateDir, date);
   }
   writeInternalLog(cfg, 'report', {
@@ -2069,15 +2111,15 @@ async function processReportJobs(cfg, opts = {}) {
   }
   tryScheduleReportJobs(cfg, new Date(), { spawn: false });
   const now = Date.now();
-  // Confirmed dates must advance contiguously. Stop at the first incomplete
-  // date so a later success cannot hide an earlier failed report.
+  // Confirmed dates must advance contiguously. Process independent due jobs
+  // even when an earlier retry is delayed or fails validation.
   for (const job of listReportJobs(cfg)) {
     if (job.status === 'completed') continue;
     const due = Date.parse(job.nextAttemptAt || job.createdAt || new Date().toISOString());
     if (!Number.isNaN(due) && due > now) {
-      break;
+      continue;
     }
-    if (!await runReportJob(cfg, job.date, opts)) break;
+    await runReportJob(cfg, job.date, opts);
   }
   for (const job of listReportJobs(cfg)) {
     if (job.status === 'completed') continue;
@@ -2362,6 +2404,7 @@ function setConfigPath(file) {
 
 module.exports = {
   buildReportPrompt,
+  completeReportReferences,
   config,
   extractExternalReferences,
   generateReport,
