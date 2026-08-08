@@ -632,6 +632,38 @@ test('redacts credential-like values from generated reports', async () => {
   assert.match(report, /\[REDACTED\]/);
 });
 
+test('completes collected references before generated reports are validated', async () => {
+  const raw = JSON.stringify({
+    event: 'AISessionTurn',
+    sourceId: 'codex:session:reference-turn',
+    prompt: '공식 문서를 참고해 구현해줘',
+    references: [{ title: '공식 문서', url: 'https://example.com/official-docs' }],
+  }) + '\n';
+
+  const report = await onmhj.generateReport(
+    { reportAuth: 'agent', reportLanguage: 'ko' },
+    date,
+    raw,
+    {
+      codexCommand: 'codex-native',
+      runAgent: () => ({ status: 0, stdout: validReport(), stderr: '' }),
+    },
+  );
+
+  assert.match(report, /https:\/\/example\.com\/official-docs/);
+  assert.equal(
+    onmhj.validateReport(
+      report,
+      date,
+      'ko',
+      '',
+      [{ title: '공식 문서', url: 'https://example.com/official-docs' }],
+      { requireTaskFormat: true },
+    ),
+    report,
+  );
+});
+
 test('generates a large report through chunk map and final reduce calls', async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-chunked-report-'));
   const raw = Array.from({ length: 8 }, (_, index) => JSON.stringify({

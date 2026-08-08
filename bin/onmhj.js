@@ -1869,7 +1869,14 @@ async function generateReport(cfg, date, raw, deps = {}) {
     prompt = buildReducePrompt(date, summaries, raw, language, previousReport);
   }
   const output = await callReportBackend(cfg, prompt, deps);
-  return validateReport(redactSecrets(output), date, language, previousReport, references, { requireTaskFormat: true });
+  return validateReport(
+    completeReportReferences(redactSecrets(output), references, language),
+    date,
+    language,
+    previousReport,
+    references,
+    { requireTaskFormat: true },
+  );
 }
 
 function syncReportRepo(repoPath) {
