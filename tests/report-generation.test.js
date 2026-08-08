@@ -862,6 +862,37 @@ test('full pipeline adds collected references to raw evidence and the report pro
   assert.match(prompt, /## 참고 자료/);
 });
 
+test('completes a retried job from its valid stored report without regenerating it', async () => {
+  const cfg = createRuntime();
+  const rawTarget = path.join(cfg.repoPath, 'raw', 'ai-sessions', `${date}.jsonl`);
+  const reportTarget = path.join(cfg.repoPath, 'reports', `${date}.md`);
+  const jobsDir = path.join(cfg.stateDir, 'jobs', 'reports');
+  fs.mkdirSync(path.dirname(rawTarget), { recursive: true });
+  fs.mkdirSync(path.dirname(reportTarget), { recursive: true });
+  fs.mkdirSync(jobsDir, { recursive: true });
+  fs.writeFileSync(rawTarget, JSON.stringify({
+    event: 'AISessionTurn',
+    references: [{ title: '외부 자료', url: 'https://example.com/article' }],
+  }) + '\n');
+  fs.writeFileSync(reportTarget, reportWithReferences());
+  fs.writeFileSync(path.join(jobsDir, `${date}.json`), JSON.stringify({
+    date,
+    status: 'failed',
+    attempts: 3,
+    nextAttemptAt: '2000-01-01T00:00:00.000Z',
+    lastError: 'report reference section is incomplete',
+  }));
+
+  await onmhj.processReportJobs(cfg, {
+    generateReport: async () => { throw new Error('report generation must not run'); },
+  });
+
+  const job = onmhj.readReportJob(cfg, date);
+  assert.equal(job.status, 'completed');
+  assert.equal(job.lastError, '');
+  assert.equal(fs.readFileSync(reportTarget, 'utf8'), reportWithReferences());
+});
+
 test('full pipeline leaves an existing report untouched when regenerated content is destructive', async () => {
   const cfg = createRuntime();
   const reportTarget = path.join(cfg.repoPath, 'reports', `${date}.md`);

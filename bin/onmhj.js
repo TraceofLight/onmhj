@@ -2077,7 +2077,11 @@ async function runReportJob(cfg, date, opts = {}) {
       lastStartedAt: now,
     });
     try {
-      await runFullReport(cfg, date, opts);
+      const reportTarget = path.join(cfg.repoPath, 'reports', date + '.md');
+      const existingReport = hasValidReport(cfg, date)
+        ? async () => fs.readFileSync(reportTarget, 'utf8')
+        : undefined;
+      await runFullReport(cfg, date, existingReport ? { ...opts, generateReport: existingReport } : opts);
       writeReportJob(cfg, {
         ...readReportJob(cfg, date),
         date,
