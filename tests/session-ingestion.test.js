@@ -652,6 +652,7 @@ test('parse failure stops the cursor, stores metadata only, and clears after ret
   assert.equal(quarantine.includes(rawSecret), false);
   assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), true);
 
+  await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
   fs.writeFileSync(transcript, prefix + lines.slice(4).join('\n') + '\n');
   const retried = await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
 
@@ -659,6 +660,21 @@ test('parse failure stops the cursor, stores metadata only, and clears after ret
   assert.equal(fs.readdirSync(quarantineDir).length, 0);
   assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), false);
   assert.equal(readEvents(stateDir)[0].status, 'complete');
+  const logDir = path.join(stateDir, 'internal');
+  const logText = fs.readdirSync(logDir).map(name => fs.readFileSync(path.join(logDir, name), 'utf8')).join('');
+  const logs = logText.trim().split('\n').map(JSON.parse);
+  assert.equal(logText.includes(rawSecret), false);
+  assert.equal(logText.includes(transcript), false);
+  assert.equal(logText.includes('actual user task'), false);
+  assert.equal(logs.filter(item => item.action === 'session_ingest_failed').length, 1);
+  const recovered = logs.filter(item => item.action === 'session_ingest_recovered');
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0].previousCode, 'invalid_json');
+  assert.equal(recovered[0].pathHash, JSON.parse(quarantine).pathHash);
+  const completed = logs.filter(item => item.action === 'session_ingest_completed');
+  assert.deepEqual(completed.map(item => item.failures), [1, 1, 0]);
+  assert.equal(completed.at(-1).files, 1);
+  assert.equal(completed.at(-1).changed, 1);
 });
 
 test('raw session publish merges multiple dates in one commit without report changes', () => {

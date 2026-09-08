@@ -147,6 +147,8 @@ Internal operational logs are stored separately and do not include prompt text:
 ~/.local/state/onmhj/internal/YYYY-MM-DD.jsonl
 ```
 
+Session ingestion logs `session_ingest_failed` when failure metadata changes, `session_ingest_recovered` when a quarantined file succeeds, and `session_ingest_completed` with parser version, file/change/failure counts, and elapsed milliseconds. Per-file diagnostics use a path hash and error code, not transcript content. An unchanged failure is counted in each batch without repeating its detailed entry.
+
 ## Manual Injection
 
 Inject one manual event into the local spool:
@@ -174,7 +176,9 @@ node /path/to/onmhj/bin/onmhj.js sessions
 
 The first scan records per-file byte cursors under `~/.local/state/onmhj/session-ingest/`. Parser failures create metadata-only quarantine entries and block final-report confirmation for the affected date until the same command retries successfully. OpenAI-compatible clients or proxies can instead import JSONL records containing `provider`, `tsUtc`, `cwd`, `request`, and `response`.
 
-Parser version 6 extracts public Markdown links, HTTP(S) URLs, and DOI values from final assistant answers into `AISessionTurn.references`. It excludes local files, localhost, private-network and local-only hosts, credentialed URLs, and URLs containing sensitive authentication query parameters. It does not inspect tool results or browsing history. Newly generated reports use numbered task sections, preserve the reference-to-turn provenance, and place supplied URLs only under the related task's `References` or `참고 자료` subsection. Existing legacy reports remain valid until explicitly regenerated.
+Parser version 7 also captures Codex user messages from `response_item` records whose metadata matches the active turn, and recognizes internal model-switch turns. Existing `event_msg:user_message` records remain authoritative. Run `sessions` after upgrading to replay older cursors and retry quarantined transcripts; successful replay clears quarantine automatically. Restart any running report worker from the newly installed plugin cache so it uses the updated parser.
+
+Public Markdown links, HTTP(S) URLs, and DOI values from final assistant answers are extracted into `AISessionTurn.references`. This excludes local files, localhost, private-network and local-only hosts, credentialed URLs, and URLs containing sensitive authentication query parameters. It does not inspect tool results or browsing history. Newly generated reports use numbered task sections, preserve the reference-to-turn provenance, and place supplied URLs only under the related task's `References` or `참고 자료` subsection. Existing legacy reports remain valid until explicitly regenerated.
 
 Imported events go to `~/.local/state/onmhj/events/YYYY-MM-DD.jsonl`; run `flush YYYY-MM-DD` to write the report repo.
 

@@ -52,7 +52,7 @@ const RAW_SESSION_COMMIT_MESSAGE = `data(sessions): publish raw AI sessions
 - 다른 기기 및 비-transcript evidence 보존
 
 작업 세부 사항:
-- parser v6 cursor 범위의 authoritative raw reconciliation
+- parser cursor 범위의 authoritative raw reconciliation
 - daily, reports 및 confirmation 변경 제외`;
 
 function usage() {
@@ -864,12 +864,28 @@ async function ingestSessionFile(cfg, source, cursors) {
     };
   }
   const quarantine = quarantineFile(cfg, file);
-  if (failure) writeJson(quarantine, failure);
-  else if (fs.existsSync(quarantine)) fs.unlinkSync(quarantine);
+  const previousFailure = readJson(quarantine, null);
+  if (failure) {
+    writeJson(quarantine, failure);
+    if (JSON.stringify(previousFailure) !== JSON.stringify(failure)) {
+      writeInternalLog(cfg, 'session_ingest_failed', failure);
+    }
+  } else if (fs.existsSync(quarantine)) {
+    fs.unlinkSync(quarantine);
+    writeInternalLog(cfg, 'session_ingest_recovered', {
+      provider: source.provider,
+      pathHash: previousFailure?.pathHash,
+      affectedDate: previousFailure?.affectedDate,
+      previousCode: previousFailure?.code,
+      parserVersion: SESSION_PARSER_VERSION,
+      changed,
+    });
+  }
   return { changed, failures: failure ? 1 : 0 };
 }
 
 async function ingestSessionFilesUnlocked(cfg, sources) {
+  const started = Date.now();
   withEventSpoolLock(cfg, () => {});
   const cursors = readJson(cursorFile(cfg), { version: 1, files: {} });
   cursors.version = SESSION_PARSER_VERSION;
@@ -881,6 +897,13 @@ async function ingestSessionFilesUnlocked(cfg, sources) {
     failures += result.failures;
   }
   writeJson(cursorFile(cfg), cursors);
+  writeInternalLog(cfg, 'session_ingest_completed', {
+    parserVersion: SESSION_PARSER_VERSION,
+    files: sources.length,
+    changed,
+    failures,
+    durationMs: Date.now() - started,
+  });
   return { changed, failures };
 }
 
