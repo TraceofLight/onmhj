@@ -245,7 +245,7 @@ function isPrivateReferenceHost(hostname) {
 }
 
 function normalizeReferenceUrl(value) {
-  const candidate = String(value || '').trim().replace(/[.,;:!?}\]]+$/, '').replace(/\)+$/, '');
+  const candidate = String(value || '').trim();
   if (!candidate || candidate.length > 2048) return '';
   let url;
   try {
@@ -282,17 +282,28 @@ function mergeReferences(...groups) {
   return [...merged.values()];
 }
 
+function trimReferenceToken(value) {
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === '(') depth += 1;
+    if (value[index] === ')') {
+      if (!depth) return value.slice(0, index);
+      depth -= 1;
+    }
+  }
+  return value;
+}
+
 function extractExternalReferences(value) {
   const text = String(value || '');
   const references = [];
-  for (const match of text.matchAll(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/gi)) {
-    references.push({ title: match[1], url: match[2] });
-  }
-  for (const match of text.matchAll(/https?:\/\/[^\s<>"'`()\[\]]+/gi)) {
-    references.push({ title: '', url: match[0] });
-  }
-  for (const match of text.matchAll(/\b(?:doi:\s*)?(10\.\d{4,9}\/[A-Z0-9._;()/:+-]+)/gi)) {
-    references.push({ title: '', url: `https://doi.org/${match[1]}` });
+  // Consume each URL once so neither its path nor its Markdown syntax becomes another reference.
+  const tokens = /(?:\[([^\]\n]+)\]\(<?)?(https?:\/\/[^\s<>"`\[\]]+)|\b(?:doi:\s*)?(10\.\d{4,9}\/[A-Z0-9._;()/:+-]+)/gi;
+  for (const match of text.matchAll(tokens)) {
+    let url = trimReferenceToken(match[2] || `https://doi.org/${match[3]}`);
+    if (!match[1] && text[match.index - 1] !== '<') url = url.replace(/[.,;:!?}\]]+$/, '');
+    if (!match[1] && text[match.index - 1] === "'") url = url.replace(/'$/, '');
+    references.push({ title: match[1] || '', url });
   }
   return mergeReferences(references);
 }
