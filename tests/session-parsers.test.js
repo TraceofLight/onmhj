@@ -178,6 +178,58 @@ test('Codex parser rejects an unknown prompt-less turn', () => {
   );
 });
 
+test('Codex parser recovers metadata-linked response users and preserves legacy prompts', () => {
+  const start = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn' } };
+  const finish = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } };
+  const response = content => ({
+    type: 'response_item',
+    payload: {
+      type: 'message', role: 'user', content,
+      internal_chat_message_metadata_passthrough: { turn_id: 'turn' },
+    },
+  });
+  for (const [content, expected] of [
+    [[{ type: 'input_text', text: 'actual task' }], 'actual task'],
+    [[{ type: 'input_text', text: '<environment_context>injected</environment_context>' },
+      { type: 'input_image', image_url: 'private image' },
+      { type: 'input_text', text: 'describe this' }], 'describe this'],
+    [[{ type: 'input_image', image_url: 'private image' }], '[image]'],
+  ]) {
+    const { events } = parse([start, response(content), finish], parseCodexRecord);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].prompt, expected);
+    assert.equal(events[0].assistantResponse, 'answer');
+  }
+  const legacy = { type: 'event_msg', payload: { type: 'user_message', message: 'legacy prompt' } };
+  for (const middle of [[legacy, response([{ type: 'input_text', text: 'duplicate' }])],
+    [response([{ type: 'input_text', text: 'duplicate' }]), legacy]]) {
+    assert.equal(parse([start, ...middle, finish], parseCodexRecord).events[0].prompt, 'legacy prompt');
+  }
+  const mismatched = response([{ type: 'input_text', text: 'unrelated turn' }]);
+  mismatched.payload.internal_chat_message_metadata_passthrough.turn_id = 'other';
+  assert.throws(() => parse([start, mismatched, finish], parseCodexRecord),
+    err => err.code === 'codex_missing_user_message');
+  assert.throws(() => parse([start, response([{ type: 'unknown', text: 'private' }]), finish], parseCodexRecord),
+    err => err.code === 'codex_invalid_user_message');
+});
+
+test('Codex model-switch continuation is internal without discarding a human prompt', () => {
+  const start = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn' } };
+  const modelSwitch = {
+    type: 'response_item',
+    payload: { type: 'message', role: 'developer', content: [
+      { type: 'input_text', text: '<model_switch>continue with the new model</model_switch>' },
+    ] },
+  };
+  const finish = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } };
+  assert.deepEqual(parse([start, modelSwitch, finish], parseCodexRecord).events, []);
+  const human = { type: 'event_msg', payload: { type: 'user_message', message: 'human task' } };
+  assert.equal(parse([start, human, modelSwitch, finish], parseCodexRecord).events[0].prompt, 'human task');
+  modelSwitch.payload.content[0].text = 'unknown developer instruction';
+  assert.throws(() => parse([start, modelSwitch, finish], parseCodexRecord),
+    err => err.code === 'codex_missing_user_message');
+});
+
 test('Claude parser ignores tool-result users and emits one human turn', () => {
   const { events } = parse(fixture('claude-transcript.jsonl'), parseClaudeRecord);
 

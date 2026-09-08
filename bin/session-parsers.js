@@ -39,6 +39,28 @@ function parseCodexRecord(record, previous = {}) {
     return { state, events: [] };
   }
 
+  if (record.type === 'response_item' && payload.type === 'message' && state.turn) {
+    const metadata = payload.internal_chat_message_metadata_passthrough;
+    if (payload.role === 'user' && metadata && metadata.turn_id === state.turn.turnId) {
+      if (!Array.isArray(payload.content) || !payload.content.every(block => block &&
+          ((block.type === 'input_text' && typeof block.text === 'string') || block.type === 'input_image'))) {
+        parserError('codex_invalid_user_message');
+      }
+      const text = payload.content
+        .filter(block => block.type === 'input_text' && !CODEX_INTERNAL_CONTEXT_PREFIXES.some(
+          prefix => block.text.trimStart().startsWith(prefix)))
+        .map(block => block.text)
+        .join('\n');
+      const prompt = text || (payload.content.some(block => block.type === 'input_image') ? '[image]' : '');
+      if (prompt && !state.turn.prompt) state.turn = { ...state.turn, prompt };
+    }
+    if (payload.role === 'developer' && Array.isArray(payload.content) && payload.content.some(
+      block => block.type === 'input_text' && typeof block.text === 'string' &&
+        block.text.trimStart().startsWith('<model_switch>'))) {
+      state.turn = { ...state.turn, internal: true };
+    }
+  }
+
   if (record.type === 'inter_agent_communication_metadata' ||
       record.type === 'compacted' ||
       (record.type === 'event_msg' && payload.type === 'context_compacted') ||
