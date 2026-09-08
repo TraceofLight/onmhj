@@ -27,7 +27,7 @@ const DEFAULT_REPORT_AGENT_MODELS = {
   claude: 'sonnet',
   codex: 'gpt-5.6-terra',
 };
-const SESSION_PARSER_VERSION = 9;
+const SESSION_PARSER_VERSION = 10;
 const PRIVATE_REFERENCE_HOSTS = new net.BlockList();
 for (const [network, prefix, type] of [
   ['0.0.0.0', 8, 'ipv4'],
@@ -815,8 +815,9 @@ function parserFor(provider) {
 }
 
 async function ingestSessionFile(cfg, source, cursors) {
-  const file = path.resolve(source.path);
-  const stored = cursors.files[file] || {};
+  const file = canonicalSessionPath(source.path);
+  const aliases = Object.keys(cursors.files).filter(key => key !== file && canonicalSessionPath(key) === file);
+  const stored = cursors.files[file] || cursors.files[aliases[0]] || {};
   const restart = stored.parserVersion !== SESSION_PARSER_VERSION;
   const replay = Object.hasOwn(stored, 'parserVersion') && restart;
   let state = copyJson(restart ? {} : (stored.state || {}));
@@ -855,8 +856,9 @@ async function ingestSessionFile(cfg, source, cursors) {
     }
   });
 
-  if (state.turn && state.turn.prompt) {
-    const pending = { ...state.turn, provider: source.provider, status: 'pending' };
+  const pendingTurn = state.turn?.prompt ? state.turn : state.turn?.continuation;
+  if (pendingTurn) {
+    const pending = { ...pendingTurn, provider: source.provider, status: 'pending' };
     if (pending.sessionId) sessionIds.add(pending.sessionId);
     const event = normalizedSessionEvent(cfg, pending);
     if (replay) replayEvents.push(event);
@@ -892,6 +894,13 @@ async function ingestSessionFile(cfg, source, cursors) {
       changed,
     });
   }
+  if (!failure) {
+    for (const alias of aliases) {
+      delete cursors.files[alias];
+      const oldQuarantine = quarantineFile(cfg, alias);
+      if (fs.existsSync(oldQuarantine)) fs.unlinkSync(oldQuarantine);
+    }
+  }
   return { changed, failures: failure ? 1 : 0 };
 }
 
@@ -902,7 +911,8 @@ async function ingestSessionFilesUnlocked(cfg, sources) {
   cursors.version = SESSION_PARSER_VERSION;
   let changed = 0;
   let failures = 0;
-  for (const source of sources) {
+  const unique = [...new Map(sources.map(source => [canonicalSessionPath(source.path), source])).values()];
+  for (const source of unique) {
     const result = await ingestSessionFile(cfg, source, cursors);
     changed += result.changed;
     failures += result.failures;
@@ -910,7 +920,7 @@ async function ingestSessionFilesUnlocked(cfg, sources) {
   writeJson(cursorFile(cfg), cursors);
   writeInternalLog(cfg, 'session_ingest_completed', {
     parserVersion: SESSION_PARSER_VERSION,
-    files: sources.length,
+    files: unique.length,
     changed,
     failures,
     durationMs: Date.now() - started,
@@ -947,13 +957,20 @@ function sessionSourcesFile(cfg) {
   return path.join(sessionIngestDir(cfg), 'sources.json');
 }
 
+function canonicalSessionPath(file) {
+  const resolved = path.resolve(file);
+  if (process.platform !== 'win32') return resolved;
+  if (resolved.startsWith('\\\\?\\UNC\\')) return '\\\\' + resolved.slice(8);
+  return resolved.replace(/^\\\\\?\\(?=[a-z]:\\)/i, '');
+}
+
 function sessionProvider(file) {
   return String(file).toLowerCase().includes(`${path.sep}.claude${path.sep}`) ? 'claude' : 'codex';
 }
 
 function rememberSessionSource(cfg, file, provider = sessionProvider(file)) {
   const sources = readJson(sessionSourcesFile(cfg), []);
-  const resolved = path.resolve(file);
+  const resolved = canonicalSessionPath(file);
   if (!sources.some(source => source.path === resolved)) {
     sources.push({ provider, path: resolved });
     writeJson(sessionSourcesFile(cfg), sources);
@@ -982,9 +999,12 @@ function discoverSessionSources() {
 async function ingestKnownSessions(cfg, discover = false) {
   const known = readJson(sessionSourcesFile(cfg), []);
   const sources = discover ? [...known, ...discoverSessionSources()] : known;
-  const unique = [...new Map(sources.map(source => [path.resolve(source.path), source])).values()]
+  const unique = [...new Map(sources.map(source => {
+    const file = canonicalSessionPath(source.path);
+    return [file, { ...source, path: file }];
+  })).values()]
     .filter(source => fs.existsSync(source.path));
-  for (const source of unique) rememberSessionSource(cfg, source.path, source.provider);
+  writeJson(sessionSourcesFile(cfg), unique);
   return ingestSessionFiles(cfg, unique);
 }
 

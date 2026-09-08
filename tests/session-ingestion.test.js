@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const crypto = require('node:crypto');
 
 const onmhj = require('../bin/onmhj');
 
@@ -30,6 +31,30 @@ function initRepo(repo) {
   git(repo, ['config', 'user.name', 'Test User']);
   git(repo, ['config', 'user.email', 'test@example.com']);
 }
+
+test('Windows source aliases replay once and retire obsolete cursor and quarantine keys',
+  { skip: process.platform !== 'win32' }, async () => {
+    const stateDir = tempDir();
+    const source = path.join(stateDir, 'transcript.jsonl');
+    fs.copyFileSync(path.join(__dirname, 'fixtures', 'codex-transcript.jsonl'), source);
+    const alias = path.toNamespacedPath(source);
+    const ingestDir = path.join(stateDir, 'session-ingest');
+    fs.mkdirSync(path.join(ingestDir, 'quarantine'), { recursive: true });
+    fs.writeFileSync(path.join(ingestDir, 'sources.json'), JSON.stringify([
+      { provider: 'codex', path: alias }, { provider: 'codex', path: source },
+    ]));
+    fs.writeFileSync(path.join(ingestDir, 'cursors.json'), JSON.stringify({ files: {
+      [alias]: { parserVersion: 0, offset: 0, state: {} },
+    } }));
+    const oldFailure = path.join(ingestDir, 'quarantine', crypto.createHash('sha256').update(alias).digest('hex').slice(0, 16) + '.json');
+    fs.writeFileSync(oldFailure, JSON.stringify({ affectedDate: '2026-07-13' }));
+    const result = await onmhj.ingestKnownSessions(cfg(stateDir));
+    assert.equal(result.failures, 0);
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(ingestDir, 'cursors.json'))).files), [source]);
+    assert.equal(fs.existsSync(oldFailure), false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ingestDir, 'sources.json'))), [{ provider: 'codex', path: source }]);
+    assert.equal(readEvents(stateDir).length, 1);
+  });
 
 test('completed source event replaces pending local event', () => {
   const stateDir = tempDir();
@@ -58,6 +83,29 @@ test('completed source event replaces pending local event', () => {
   assert.equal(events.length, 1);
   assert.equal(events[0].status, 'complete');
   assert.equal(events[0].assistantResponse, 'done');
+});
+
+test('unfinished continuation replay retains the original pending human event', async () => {
+  const stateDir = tempDir();
+  const source = path.join(stateDir, 'pending.jsonl');
+  const records = [
+    { type: 'session_meta', payload: { id: 'session', cwd: 'repo' } },
+    { type: 'event_msg', timestamp: '2026-07-13T01:00:00Z', payload: { type: 'task_started', turn_id: 'original' } },
+    { type: 'event_msg', payload: { type: 'user_message', message: 'human request' } },
+  ];
+  fs.writeFileSync(source, records.map(JSON.stringify).join('\n') + '\n');
+  await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: source }]);
+  const cursorPath = path.join(stateDir, 'session-ingest', 'cursors.json');
+  const cursors = JSON.parse(fs.readFileSync(cursorPath));
+  cursors.files[source].parserVersion = 0;
+  fs.writeFileSync(cursorPath, JSON.stringify(cursors));
+  fs.appendFileSync(source, JSON.stringify({ type: 'event_msg', payload: { type: 'task_started', turn_id: 'continuation' } }) + '\n');
+  await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: source }]);
+  const events = readEvents(stateDir);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].turnId, 'original');
+  assert.equal(events[0].prompt, 'human request');
+  assert.equal(events[0].status, 'pending');
 });
 
 test('merge uses latest sourceId and removes only superseded prompt previews', () => {
@@ -241,7 +289,7 @@ test('a parser version change restarts stale cursor state', async () => {
 
   assert.deepEqual(result, { changed: 0, failures: 0 });
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
-  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 9);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 10);
 });
 
 test('a successful parser replay replaces stale local turns in its session scope', async () => {
@@ -339,7 +387,7 @@ test('a successful parser replay replaces stale local turns in its session scope
   assert.ok(stagedModes.every(mode => mode === 0o600));
   assert.ok(replayLocks.length > 0);
   assert.ok(replayLocks.every(Boolean));
-  assert.equal(cursor.parserVersion, 9);
+  assert.equal(cursor.parserVersion, 10);
   assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
 });
 
@@ -846,7 +894,7 @@ test('raw session publish reconciles current-device sessions without touching un
     files: {
       'claude-transcript.jsonl': {
         provider: 'claude',
-        parserVersion: 9,
+        parserVersion: 10,
         sessionIds: ['reconciled-session'],
       },
     },

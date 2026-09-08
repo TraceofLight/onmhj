@@ -27,6 +27,48 @@ function parse(records, parseRecord) {
   return { events, state };
 }
 
+test('Codex continuation completes the unfinished human turn with its original identity', () => {
+  const records = [
+    { type: 'event_msg', timestamp: '2026-09-03T12:54:00Z', payload: { type: 'task_started', turn_id: 'original' } },
+    { type: 'event_msg', payload: { type: 'user_message', message: 'human request' } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: 'continuation' } },
+    { type: 'event_msg', payload: { type: 'token_count' } },
+    { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } },
+  ];
+  const { events } = parse(records, parseCodexRecord);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].turnId, 'original');
+  assert.equal(events[0].prompt, 'human request');
+  assert.equal(events[0].tsUtc, '2026-09-03T12:54:00Z');
+  assert.equal(events[0].assistantResponse, 'answer');
+  const fallback = records.slice(0, -1).concat([
+    { type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: 'current answer' } },
+    { type: 'event_msg', payload: { type: 'task_complete' } },
+  ]);
+  assert.equal(parse(fallback, parseCodexRecord).events[0].assistantResponse, 'current answer');
+  records.splice(3, 0, { type: 'response_item', payload: {
+    type: 'message', role: 'user', content: [{ type: 'input_text', text: 'new request' }],
+    internal_chat_message_metadata_passthrough: { turn_id: 'continuation' },
+  } });
+  const replacement = parse(records, parseCodexRecord).events[0];
+  assert.equal(replacement.turnId, 'continuation');
+  assert.equal(replacement.prompt, 'new request');
+});
+
+test('Codex heartbeat tool envelopes are internal but arbitrary tool output is not', () => {
+  const start = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'heartbeat' } };
+  const trigger = { type: 'response_item', payload: {
+    type: 'function_call_output', namespace: 'codex_app', name: 'automation_update',
+    output: '<heartbeat>\n<automation_id>test</automation_id>\n</heartbeat>',
+  } };
+  const finish = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'status' } };
+  assert.deepEqual(parse([start, trigger, finish], parseCodexRecord).events, []);
+  const human = { type: 'event_msg', payload: { type: 'user_message', message: 'human request' } };
+  assert.equal(parse([start, human, trigger, finish], parseCodexRecord).events[0].prompt, 'human request');
+  trigger.payload.namespace = 'unrelated';
+  assert.throws(() => parse([start, trigger, finish], parseCodexRecord), /codex_missing_user_message/);
+});
+
 test('Codex parser emits one canonical completed turn', () => {
   const { events } = parse(fixture('codex-transcript.jsonl'), parseCodexRecord);
 

@@ -256,6 +256,8 @@ reports/YYYY-MM-DD.md
 
 ## Troubleshooting
 
+Parser version 10 recovers a human request that continues across an unfinished Codex task boundary and recognizes native Codex automation heartbeat envelopes as internal turns. It also treats Windows `C:\...` and `\\?\C:\...` transcript paths as one source. Successful replay retires obsolete alias cursors and quarantine entries; failed replay preserves prior evidence and remains retryable. After updating, run `sessions` and verify `failures=0` before retrying a blocked report. Completed report status and the confirmation date alone do not prove that every transcript parsed successfully.
+
 If `codex plugin marketplace add` says the root has no supported manifest, check that `.agents/plugins/marketplace.json` exists.
 
 If no events appear in Codex, open `/hooks`, trust the `onmhj` hooks, and start a new session. `SessionStart` only fires for new sessions.

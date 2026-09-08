@@ -1,6 +1,6 @@
 {
   "name": "onmhj",
-  "version": "0.1.14+codex.20260908101205",
+  "version": "0.1.14+codex.20260908131116",
   "description": "Local AI-session capture with chunked raw-first reports and ordered retries.",
   "author": {
     "name": "onmhj maintainers"

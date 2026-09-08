@@ -66,6 +66,9 @@ function parseCodexRecord(record, previous = {}) {
   }
 
   if (record.type === 'inter_agent_communication_metadata' ||
+      (record.type === 'response_item' && payload.type === 'function_call_output' &&
+        payload.namespace === 'codex_app' && payload.name === 'automation_update' &&
+        typeof payload.output === 'string' && payload.output.trimStart().startsWith('<heartbeat>')) ||
       record.type === 'compacted' ||
       (record.type === 'event_msg' && payload.type === 'context_compacted') ||
       (record.type === 'response_item' && codexContextOnlyUser(payload))) {
@@ -80,6 +83,7 @@ function parseCodexRecord(record, previous = {}) {
   if (record.type !== 'event_msg') return { state, events: [] };
   if (payload.type === 'task_started') {
     if (typeof payload.turn_id !== 'string') parserError('codex_invalid_task_started');
+    const continuation = state.turn?.prompt ? state.turn : state.turn?.continuation;
     state.turn = {
       sessionId: state.sessionId || '',
       turnId: payload.turn_id,
@@ -87,6 +91,7 @@ function parseCodexRecord(record, previous = {}) {
       cwd: state.cwd || '',
       prompt: '',
       assistantResponse: '',
+      ...(continuation ? { continuation } : {}),
     };
     return { state, events: [] };
   }
@@ -111,10 +116,11 @@ function parseCodexRecord(record, previous = {}) {
   }
 
   if (payload.type !== 'task_complete' || !state.turn) return { state, events: [] };
-  const turn = state.turn;
+  const turn = !state.turn.prompt && !state.turn.internal && state.turn.continuation
+    ? state.turn.continuation : state.turn;
   const assistantResponse = typeof payload.last_agent_message === 'string'
     ? payload.last_agent_message
-    : turn.assistantResponse;
+    : state.turn.assistantResponse;
   if (typeof turn.prompt !== 'string' || !turn.prompt) {
     if (turn.internal || state.subagentTranscript || !turn.sawIntermediate) {
       delete state.turn;
