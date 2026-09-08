@@ -1088,3 +1088,48 @@ test('regenerating an older report does not move confirmation backward', async (
   assert.equal(local.confirmedThrough, '2026-07-12');
   assert.equal(remote.confirmedThrough, '2026-07-12');
 });
+
+test('worker stays alive when a skipped retry becomes due during a later report', async t => {
+  const cfg = createRuntime();
+  const earlierDate = '2026-07-10';
+  const eventFile = path.join(cfg.stateDir, 'events', `${date}.jsonl`);
+  fs.writeFileSync(path.join(cfg.stateDir, 'events', `${earlierDate}.jsonl`),
+    fs.readFileSync(eventFile, 'utf8').replaceAll(date, earlierDate));
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-07-12T00:00:00.000Z') });
+  const jobsDir = path.join(cfg.stateDir, 'jobs', 'reports');
+  fs.mkdirSync(jobsDir, { recursive: true });
+  fs.writeFileSync(path.join(jobsDir, `${earlierDate}.json`), JSON.stringify({
+    date: earlierDate,
+    status: 'failed',
+    nextAttemptAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  const options = {
+    generateReport: async (_cfg, workDate) => {
+      t.mock.timers.tick(61_000);
+      return validReportFor(workDate);
+    },
+  };
+  const delay = await onmhj.processReportJobs(cfg, options);
+
+  assert.equal(onmhj.readReportJob(cfg, date).status, 'completed');
+  assert.equal(onmhj.readReportJob(cfg, earlierDate).status, 'pending');
+  assert.equal(delay, 1);
+  assert.equal(await onmhj.processReportJobs(cfg, options), 0);
+  assert.equal(onmhj.readReportJob(cfg, earlierDate).status, 'completed');
+});
+
+test('worker wakes for the soonest retry regardless of report date order', async t => {
+  const cfg = createRuntime();
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-07-12T00:00:00.000Z') });
+  const jobsDir = path.join(cfg.stateDir, 'jobs', 'reports');
+  fs.mkdirSync(jobsDir, { recursive: true });
+  for (const [workDate, delay] of [['2026-07-10', 60_000], [date, 10_000]]) {
+    fs.writeFileSync(path.join(jobsDir, `${workDate}.json`), JSON.stringify({
+      date: workDate,
+      status: 'failed',
+      nextAttemptAt: new Date(Date.now() + delay).toISOString(),
+    }));
+  }
+
+  assert.equal(await onmhj.processReportJobs(cfg), 10_000);
+});

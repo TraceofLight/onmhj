@@ -2155,12 +2155,13 @@ async function processReportJobs(cfg, opts = {}) {
     }
     await runReportJob(cfg, job.date, opts);
   }
+  let nextDelay = Infinity;
   for (const job of listReportJobs(cfg)) {
     if (job.status === 'completed') continue;
     const due = Date.parse(job.nextAttemptAt || new Date().toISOString());
-    return Number.isNaN(due) ? 0 : Math.max(0, due - Date.now());
+    nextDelay = Math.min(nextDelay, Number.isNaN(due) ? 1 : Math.max(1, due - Date.now()));
   }
-  return 0;
+  return Number.isFinite(nextDelay) ? nextDelay : 0;
 }
 
 async function runEjmhj(cfg, date, opts = {}) {
