@@ -174,34 +174,35 @@ test('report prompt requires collected references without inventing new URLs', (
   assert.match(prompt, /https:\/\/example\.com\/article/);
   assert.match(prompt, /plugin validator의 hooks 오류/);
   assert.match(prompt, /reference provenance/);
-  assert.match(prompt, /제공된 URL만/);
+  assert.match(prompt, /새 URL을 직접 작성하지 말고 참고 ID만/);
   assert.match(prompt, /#### 후속 작업.*#### 참고 자료/);
-  assert.match(prompt, /URL.*#### 참고 자료.*밖.*작성하지/);
+  assert.match(prompt, /#### 참고 자료.*\{\{ref:R1\}\}/);
 });
 
 test('report prompts explicitly forbid URLs when references are empty', () => {
   for (const language of ['ko', 'en']) {
     const prompt = onmhj.buildReportPrompt(date, simpleRaw, language);
-    assert.match(prompt, /--- allowed reference URLs \(JSON\) ---\n\[\]/);
-    assert.match(prompt, language === 'ko' ? /목록이 비어 있으면 URL과 참고 자료 섹션을 작성하지 마라/ : /list is empty, write no URLs or reference sections/);
+    assert.match(prompt, /--- reference ID catalog \(JSON\) ---\n\[\]/);
+    assert.match(prompt, language === 'ko' ? /목록이 비어 있으면 URL과 참고 자료 섹션을 작성하지 마라/ : /catalog is empty, write no URLs or reference sections/);
   }
 });
 
 test('retries invalid references once with validation feedback and private diagnostics', async () => {
   const cfg = createRuntime();
   const prompts = [];
-  const raw = JSON.stringify({ references: [{ url: 'https://example.com/article' }] });
+  const raw = JSON.stringify({ references: [{ title: '외부 자료', url: 'https://example.com/article' }] });
   const report = await onmhj.generateReport(cfg, date, raw, {
     codexCommand: 'codex-native',
     runAgent: (_command, _args, prompt) => {
       prompts.push(prompt);
-      return { status: 0, stdout: reportWithReferences(prompts.length === 1 ? 'https://example.com/unconfirmed' : undefined) };
+      return { status: 0, stdout: prompts.length === 1 ? reportWithReferences('https://example.com/unconfirmed')
+        : validReport().trimEnd() + '\n\n#### 참고 자료\n\n- {{ref:R1}}\n' };
     },
   });
   assert.equal(report, reportWithReferences());
   assert.equal(prompts.length, 2);
-  assert.match(prompts[1], /Previous output failed validation: report contains unsupported reference/);
-  assert.match(prompts[1], /allowed reference URLs \(JSON\) ---\n\["https:\/\/example.com\/article"\]/);
+  assert.match(prompts[1], /Previous output failed validation: report must use reference IDs for new links/);
+  assert.match(prompts[1], /"id":"R1","title":"외부 자료","url":"https:\/\/example.com\/article"/);
   const logs = fs.readdirSync(path.join(cfg.stateDir, 'internal')).flatMap(file =>
     fs.readFileSync(path.join(cfg.stateDir, 'internal', file), 'utf8').trim().split('\n').map(JSON.parse));
   assert.equal(logs[0].action, 'report_validation_failed');
@@ -222,7 +223,7 @@ test('persistent invalid references stop after two attempts without publishing a
         return { status: 0, stdout: validReport().replace('검증 완료', 'https://example.com/unconfirmed') };
       },
     }),
-  }), /unsupported reference/);
+  }), /must use reference IDs/);
   assert.equal(calls, 2);
   assert.equal(fs.existsSync(path.join(cfg.repoPath, 'reports', `${date}.md`)), false);
   assert.equal(childProcess.execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: cfg.repoPath, encoding: 'utf8' }).trim(), '1');
@@ -265,6 +266,44 @@ test('validates the optional reference section against collected evidence', () =
     ),
     /top-level|inside a task/,
   );
+});
+
+test('reference IDs render the original Epic paths without locale rewriting', async () => {
+  const references = [
+    { title: '렌더링 API', url: 'https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/Engine/ISceneViewExtension/PrePostProcessPass_RenderThread?application_version=5.5' },
+    { title: '평면 반사', url: 'https://dev.epicgames.com/documentation/en-us/unreal-engine/planar-reflections-in-unreal-engine' },
+  ];
+  const output = validReport().trimEnd() + '\n\n#### 참고 자료\n\n- {{ref:R2}}\n- {{ref:R1}}\n';
+  const report = await onmhj.generateReport({ reportAuth: 'agent' }, date, JSON.stringify({ references }), {
+    runAgent: () => ({ status: 0, stdout: output }),
+  });
+  assert.match(report, /\[평면 반사\]\(https:\/\/dev.epicgames.com\/documentation\/en-us\/unreal-engine\/planar-reflections-in-unreal-engine\)/);
+  assert.deepEqual(new Set(onmhj.extractExternalReferences(report).map(reference => reference.url)),
+    new Set(references.map(reference => reference.url)));
+  assert.doesNotMatch(report, /\{\{ref:/);
+});
+
+test('unknown, malformed, and misplaced reference IDs remain validation errors', async () => {
+  const raw = JSON.stringify({ references: [{ url: 'https://example.com/article' }] });
+  for (const [output, error] of [
+    [validReport() + '\n#### 참고 자료\n- {{ref:R999}}\n', /unknown reference ID/],
+    [validReport() + '\n#### 참고 자료\n- {{ref:R1\n', /malformed reference ID/],
+    [validReport().replace('검증 완료', '{{ref:R1}}'), /reference must be inside/],
+  ]) {
+    await assert.rejects(() => onmhj.generateReport({ reportAuth: 'agent' }, date, raw, {
+      runAgent: () => ({ status: 0, stdout: output }),
+    }), error);
+  }
+});
+
+test('reference rendering preserves existing report URL lines verbatim', async () => {
+  const previousReport = reportWithReferences();
+  const raw = JSON.stringify({ references: [{ title: '외부 자료', url: 'https://example.com/article' }] });
+  const report = await onmhj.generateReport({ reportAuth: 'agent' }, date, raw, {
+    previousReport,
+    runAgent: () => ({ status: 0, stdout: previousReport }),
+  });
+  assert.equal(report, previousReport);
 });
 
 test('completes missing references in the final task reference section', () => {

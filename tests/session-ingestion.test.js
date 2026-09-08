@@ -241,7 +241,7 @@ test('a parser version change restarts stale cursor state', async () => {
 
   assert.deepEqual(result, { changed: 0, failures: 0 });
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
-  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 8);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 9);
 });
 
 test('a successful parser replay replaces stale local turns in its session scope', async () => {
@@ -339,7 +339,7 @@ test('a successful parser replay replaces stale local turns in its session scope
   assert.ok(stagedModes.every(mode => mode === 0o600));
   assert.ok(replayLocks.length > 0);
   assert.ok(replayLocks.every(Boolean));
-  assert.equal(cursor.parserVersion, 8);
+  assert.equal(cursor.parserVersion, 9);
   assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
 });
 
@@ -846,7 +846,7 @@ test('raw session publish reconciles current-device sessions without touching un
     files: {
       'claude-transcript.jsonl': {
         provider: 'claude',
-        parserVersion: 8,
+        parserVersion: 9,
         sessionIds: ['reconciled-session'],
       },
     },
