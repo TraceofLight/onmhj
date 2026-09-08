@@ -179,6 +179,55 @@ test('report prompt requires collected references without inventing new URLs', (
   assert.match(prompt, /URL.*#### 참고 자료.*밖.*작성하지/);
 });
 
+test('report prompts explicitly forbid URLs when references are empty', () => {
+  for (const language of ['ko', 'en']) {
+    const prompt = onmhj.buildReportPrompt(date, simpleRaw, language);
+    assert.match(prompt, /--- allowed reference URLs \(JSON\) ---\n\[\]/);
+    assert.match(prompt, language === 'ko' ? /목록이 비어 있으면 URL과 참고 자료 섹션을 작성하지 마라/ : /list is empty, write no URLs or reference sections/);
+  }
+});
+
+test('retries invalid references once with validation feedback and private diagnostics', async () => {
+  const cfg = createRuntime();
+  const prompts = [];
+  const raw = JSON.stringify({ references: [{ url: 'https://example.com/article' }] });
+  const report = await onmhj.generateReport(cfg, date, raw, {
+    codexCommand: 'codex-native',
+    runAgent: (_command, _args, prompt) => {
+      prompts.push(prompt);
+      return { status: 0, stdout: reportWithReferences(prompts.length === 1 ? 'https://example.com/unconfirmed' : undefined) };
+    },
+  });
+  assert.equal(report, reportWithReferences());
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /Previous output failed validation: report contains unsupported reference/);
+  assert.match(prompts[1], /allowed reference URLs \(JSON\) ---\n\["https:\/\/example.com\/article"\]/);
+  const logs = fs.readdirSync(path.join(cfg.stateDir, 'internal')).flatMap(file =>
+    fs.readFileSync(path.join(cfg.stateDir, 'internal', file), 'utf8').trim().split('\n').map(JSON.parse));
+  assert.equal(logs[0].action, 'report_validation_failed');
+  assert.equal(logs[0].unsupportedReferenceCount, 1);
+  assert.match(logs[0].unsupportedReferenceHashes[0], /^[a-f0-9]{64}$/);
+  assert.equal(logs[1].action, 'report_validation_passed');
+  assert.doesNotMatch(JSON.stringify(logs), /example.com|unconfirmed|완료 작업/);
+});
+
+test('persistent invalid references stop after two attempts without publishing artifacts', async () => {
+  const cfg = createRuntime();
+  let calls = 0;
+  await assert.rejects(() => onmhj.runFullReport(cfg, date, {
+    generateReport: (_cfg, workDate, raw) => onmhj.generateReport(cfg, workDate, raw, {
+      codexCommand: 'codex-native',
+      runAgent: () => {
+        calls += 1;
+        return { status: 0, stdout: validReport().replace('검증 완료', 'https://example.com/unconfirmed') };
+      },
+    }),
+  }), /unsupported reference/);
+  assert.equal(calls, 2);
+  assert.equal(fs.existsSync(path.join(cfg.repoPath, 'reports', `${date}.md`)), false);
+  assert.equal(childProcess.execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: cfg.repoPath, encoding: 'utf8' }).trim(), '1');
+});
+
 test('validates the optional reference section against collected evidence', () => {
   const references = [{ title: '외부 자료', url: 'https://example.com/article' }];
 
