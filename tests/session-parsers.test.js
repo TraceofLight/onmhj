@@ -116,6 +116,23 @@ test('Codex parser skips a prompt-less inter-agent turn', () => {
   assert.equal(state.turn, undefined);
 });
 
+test('Codex forked subagent transcripts retain their source across inherited parent metadata', () => {
+  const parent = { type: 'session_meta', payload: { id: 'parent', thread_source: 'user' } };
+  const start = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn' } };
+  const activity = { type: 'event_msg', payload: { type: 'token_count' } };
+  const finish = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } };
+  for (const source of [{ thread_source: 'subagent' },
+    { source: { subagent: { thread_spawn: { parent_thread_id: 'parent' } } } }]) {
+    const child = { type: 'session_meta', payload: { id: 'child', ...source } };
+    assert.deepEqual(parse([child, parent, start, activity, finish], parseCodexRecord).events, []);
+    const human = { type: 'event_msg', payload: { type: 'user_message', message: 'preserved human task' } };
+    assert.equal(parse([child, parent, start, human, finish], parseCodexRecord).events[0].prompt,
+      'preserved human task');
+    assert.throws(() => parse([parent, child, start, activity, finish], parseCodexRecord),
+      err => err.code === 'codex_missing_user_message');
+  }
+});
+
 test('Codex parser skips a compaction-only turn', () => {
   const { events, state } = parse([
     {

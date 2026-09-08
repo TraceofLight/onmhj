@@ -27,7 +27,7 @@ const DEFAULT_REPORT_AGENT_MODELS = {
   claude: 'sonnet',
   codex: 'gpt-5.6-terra',
 };
-const SESSION_PARSER_VERSION = 7;
+const SESSION_PARSER_VERSION = 8;
 const PRIVATE_REFERENCE_HOSTS = new net.BlockList();
 for (const [network, prefix, type] of [
   ['0.0.0.0', 8, 'ipv4'],

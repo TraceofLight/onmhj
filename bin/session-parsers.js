@@ -34,6 +34,10 @@ function parseCodexRecord(record, previous = {}) {
   }
 
   if (record.type === 'session_meta') {
+    if (state.subagentTranscript === undefined) {
+      state.subagentTranscript = payload.thread_source === 'subagent' ||
+        !!(payload.source && payload.source.subagent && payload.source.subagent.thread_spawn);
+    }
     state.sessionId = String(payload.session_id || payload.id || state.sessionId || '');
     state.cwd = String(payload.cwd || state.cwd || '');
     return { state, events: [] };
@@ -112,7 +116,7 @@ function parseCodexRecord(record, previous = {}) {
     ? payload.last_agent_message
     : turn.assistantResponse;
   if (typeof turn.prompt !== 'string' || !turn.prompt) {
-    if (turn.internal || !turn.sawIntermediate) {
+    if (turn.internal || state.subagentTranscript || !turn.sawIntermediate) {
       delete state.turn;
       return { state, events: [] };
     }
