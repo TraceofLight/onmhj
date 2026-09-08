@@ -149,6 +149,10 @@ Internal operational logs are stored separately and do not include prompt text:
 
 Session ingestion logs `session_ingest_failed` when failure metadata changes, `session_ingest_recovered` when a quarantined file succeeds, and `session_ingest_completed` with parser version, file/change/failure counts, and elapsed milliseconds. Per-file diagnostics use a path hash and error code, not transcript content. An unchanged failure is counted in each batch without repeating its detailed entry.
 
+Final report prompts include the allowed reference URLs explicitly. A failed final validation gets one corrective generation attempt with validation feedback; a second failure leaves publication artifacts untouched and follows the job retry policy. `report_validation_failed` records the attempt, reason, allowed reference count, unsupported reference count, and URL hashes without storing the report text or URLs. `report_validation_passed` records the successful attempt.
+
+The worker waits for the soonest unfinished job's retry deadline regardless of work-date order. Already-due work schedules another tick rather than signaling completion; `worker_done` means no unfinished jobs remain.
+
 ## Manual Injection
 
 Inject one manual event into the local spool:
