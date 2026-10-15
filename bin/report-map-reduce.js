@@ -9,6 +9,7 @@ const MAP_ATTEMPTS = 3;
 const MAP_PROMPT_VERSION = 3;
 const REDUCE_INPUT_BYTES = 64 * 1024;
 const FLOOR_OVERHEAD_BYTES = 512;
+const REQUEST_RATIO = 0.6;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -24,7 +25,7 @@ function buildMapPrompt(date, language, chunk, options = {}) {
     ...(intermediate ? [
       'Merge related tasks, but retain every supplied evidence ID and every distinct confirmed fact.',
       'Prefer short fact bullets over repeated prose.',
-      `Keep the returned UTF-8 JSON under ${chunk.maxOutputBytes} bytes. Compress wording aggressively to fit.`,
+      `Keep the returned UTF-8 JSON under ${chunk.requestedOutputBytes || chunk.maxOutputBytes} bytes. Compress wording aggressively to fit.`,
     ] : []),
     `Work date: ${date}`,
     `Chunk ID: ${chunk.chunkId}`,
@@ -70,9 +71,6 @@ function validateMapSummary(output, chunk) {
   if (!value || value.schemaVersion !== 1 || value.chunkId !== chunk.chunkId || !Array.isArray(value.tasks)) {
     throw new Error(`map summary contract mismatch for chunk ${chunk.index}`);
   }
-  if (chunk.maxOutputBytes && Buffer.byteLength(JSON.stringify(value)) >= chunk.maxOutputBytes) {
-    throw new Error(`map summary must be under ${chunk.maxOutputBytes} bytes for chunk ${chunk.index}`);
-  }
   const allowed = new Set(chunk.evidenceIds);
   const allowedReferences = new Set(chunk.referenceUrls);
   const cited = new Set();
@@ -95,6 +93,10 @@ function validateMapSummary(output, chunk) {
     }
   }
   if (chunk.evidenceIds.some(id => !cited.has(id))) throw new Error('map summary omits evidence ID');
+  // Size is checked last so a caller can tell an output that only overshoots its limit.
+  if (chunk.maxOutputBytes && Buffer.byteLength(JSON.stringify(value)) >= chunk.maxOutputBytes) {
+    throw Object.assign(new Error(`map summary must be under ${chunk.maxOutputBytes} bytes for chunk ${chunk.index}`), { overLimitValue: value });
+  }
   return value;
 }
 
@@ -119,7 +121,7 @@ async function mapLimit(items, limit, mapper) {
   return results;
 }
 
-async function runValidatedPrompt(runPrompt, prompt, chunk) {
+async function runValidatedPrompt(runPrompt, prompt, chunk, options = {}) {
   let lastError;
   let retryPrompt = prompt;
   for (let attempt = 0; attempt < MAP_ATTEMPTS; attempt += 1) {
@@ -127,6 +129,11 @@ async function runValidatedPrompt(runPrompt, prompt, chunk) {
       const summary = validateMapSummary(await runPrompt(retryPrompt, chunk), chunk);
       return summary;
     } catch (error) {
+      // The model tracks the requested size only loosely; a valid output smaller than its input still makes progress.
+      if (options.acceptShrinking && error.overLimitValue && Buffer.byteLength(JSON.stringify(error.overLimitValue)) < chunk.bytes - 1) {
+        options.acceptShrinking();
+        return error.overLimitValue;
+      }
       lastError = error;
       retryPrompt = `${prompt}\n\nPrevious output failed validation: ${error.message}\nReturn corrected JSON only, without commentary.`;
     }
@@ -195,9 +202,12 @@ async function reduceMapSummaries(options) {
   const all = summaryChunk(reduced, 0, 1);
   if (evidenceFloorBytes(all) >= targetBytes) throw new Error('evidence IDs exceed the reduction target');
   // Below half the target every output fits two to a group, so the summary count halves each round.
-  const maxRounds = evidenceFloorBytes(all, { keepReferences: true }) + FLOOR_OVERHEAD_BYTES <= targetBytes / 2
+  let maxRounds = evidenceFloorBytes(all, { keepReferences: true }) + FLOOR_OVERHEAD_BYTES <= targetBytes / 2
     ? Math.ceil(Math.log2(Math.max(reduced.length, 2))) + 2
     : reduced.length + 2;
+  const initialCount = reduced.length;
+  // Overshooting outputs void the halving argument, so fall back to the linear cap.
+  const overBudget = () => { maxRounds = Math.max(maxRounds, initialCount + 2); };
   for (let round = 1; summaryBytes(reduced) > targetBytes; round += 1) {
     if (round > maxRounds) throw new Error(`map summaries did not converge within ${maxRounds} reduction rounds`);
     const beforeBytes = summaryBytes(reduced);
@@ -215,10 +225,16 @@ async function reduceMapSummaries(options) {
         chunk.bytes - 1,
         Math.max(share, evidenceFloorBytes(chunk, { keepReferences: true }) + FLOOR_OVERHEAD_BYTES),
       );
+      // Measured outputs land at 0.8-1.5x the requested size, so ask for 60% of the limit.
+      chunk.requestedOutputBytes = Math.min(
+        chunk.maxOutputBytes - 1,
+        Math.max(evidenceFloorBytes(chunk, { keepReferences: true }) + FLOOR_OVERHEAD_BYTES, Math.floor(chunk.maxOutputBytes * REQUEST_RATIO)),
+      );
       return runValidatedPrompt(
         runPrompt,
         buildMapPrompt(date, language, chunk, { intermediate: true }),
         chunk,
+        { acceptShrinking: overBudget },
       );
     });
     if (summaryBytes(reduced) >= beforeBytes) {

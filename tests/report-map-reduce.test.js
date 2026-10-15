@@ -243,16 +243,20 @@ test('recompresses an oversized atomic summary', async () => {
   const summary = JSON.parse(summaryFor(chunk));
   summary.tasks[0].background = ['가'.repeat(1000)];
 
+  const prompts = [];
   const reduced = await reduceMapSummaries({
     date: '2026-07-14',
     summaries: [summary],
     targetBytes: 1000,
     async runPrompt(prompt, intermediateChunk) {
-      assert.match(prompt, /Keep the returned UTF-8 JSON under 1000 bytes/);
+      prompts.push(prompt);
+      assert.equal(intermediateChunk.maxOutputBytes, 1000);
       return summaryFor(intermediateChunk);
     },
   });
 
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /Keep the returned UTF-8 JSON under 600 bytes/);
   assert.ok(summaryBytes(reduced) <= 1000);
   assert.deepEqual(reduced[0].tasks[0].evidenceIds, chunk.evidenceIds);
 });
@@ -433,6 +437,55 @@ test('fails within the linear round cap when a reference-heavy group cannot shri
     },
   }), /did not converge within 4 reduction rounds/);
   assert.ok(calls <= 4 * 2);
+});
+
+test('asks for less than the limit and accepts a shrinking overshoot without retrying', async () => {
+  const chunks = chunkRawEvents(rawEvents(24), { targetBytes: 1800 });
+  const summaries = chunks.map(chunk => {
+    const value = JSON.parse(summaryFor(chunk));
+    value.tasks[0].background = ['가'.repeat(150)];
+    return value;
+  });
+  const calls = [];
+  const reduced = await reduceMapSummaries({
+    date: '2026-07-14',
+    summaries,
+    targetBytes: 4000,
+    // Overshoots the requested size by 40%, sometimes past the limit, but always far below its input.
+    async runPrompt(prompt, chunk) {
+      const requested = Number(prompt.match(/under (\d+) bytes/)[1]);
+      calls.push({ chunkId: chunk.chunkId, requested, limit: chunk.maxOutputBytes });
+      const value = {
+        schemaVersion: 1, chunkId: chunk.chunkId,
+        tasks: [{ title: 'm', background: [''], process: [], decisions: [], results: [], followUps: [], evidenceIds: chunk.evidenceIds, references: [] }],
+      };
+      value.tasks[0].background = ['x'.repeat(Math.max(0, Math.floor(requested * 1.4) - Buffer.byteLength(JSON.stringify(value))))];
+      return JSON.stringify(value);
+    },
+  });
+  assert.ok(summaryBytes(reduced) <= 4000);
+  assert.ok(calls.every(call => call.requested < call.limit));
+  assert.equal(new Set(calls.map(call => call.chunkId)).size, calls.length);
+});
+
+test('retries an oversized output that also omits evidence instead of accepting it', async () => {
+  const chunks = chunkRawEvents(rawEvents(8), { targetBytes: 1800 });
+  const summaries = chunks.map(chunk => {
+    const value = JSON.parse(summaryFor(chunk));
+    value.tasks[0].background = ['가'.repeat(400)];
+    return value;
+  });
+  let calls = 0;
+  await assert.rejects(reduceMapSummaries({
+    date: '2026-07-14', summaries, targetBytes: 1500,
+    async runPrompt(_prompt, chunk) {
+      calls += 1;
+      return JSON.stringify({ schemaVersion: 1, chunkId: chunk.chunkId, tasks: [{
+        title: 'm', background: ['x'.repeat(chunk.maxOutputBytes)], process: [], decisions: [], results: [], followUps: [],
+        evidenceIds: chunk.evidenceIds.slice(1), references: [] }] });
+    },
+  }), /omits evidence ID|evidenceIds are required/);
+  assert.equal(calls % 3, 0);
 });
 
 test('rejects intermediate summaries that exceed the shrinking output limit', async () => {
