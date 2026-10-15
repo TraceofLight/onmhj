@@ -28,7 +28,7 @@ const DEFAULT_REPORT_AGENT_MODELS = {
   claude: 'sonnet',
   codex: 'gpt-5.6-terra',
 };
-const SESSION_PARSER_VERSION = 11;
+const SESSION_PARSER_VERSION = 12;
 const PRIVATE_REFERENCE_HOSTS = new net.BlockList();
 for (const [network, prefix, type] of [
   ['0.0.0.0', 8, 'ipv4'],
@@ -589,9 +589,15 @@ function upsertEventRecordUnlocked(cfg, event) {
     return true;
   }
   if (JSON.stringify(events[index]) === JSON.stringify(clean)) return false;
+  if (isStatusDowngrade(events[index], clean)) return false;
   events[index] = clean;
   fs.writeFileSync(file, events.map(item => JSON.stringify(item)).join('\n') + '\n');
   return true;
+}
+
+// Transcripts only grow, so a pending copy of a completed turn comes from a truncated fork copy.
+function isStatusDowngrade(existing, incoming) {
+  return existing.status === 'complete' && incoming.status === 'pending';
 }
 
 function upsertEventRecord(cfg, event) {
@@ -640,10 +646,17 @@ function replayReplacementPlan(cfg, provider, sessionIds, events, turnIds) {
   try {
     files = fs.readdirSync(dir).filter(name => name.endsWith('.jsonl'));
   } catch {}
+  const incoming = new Map(events.map(event => [event.sourceId, event]));
+  // Judged on the stored events before removal, so a protected completed turn survives in any date file.
+  const protectedIds = new Set();
   for (const name of files) {
     const file = path.join(dir, name);
     const current = loadEvents(file);
     const kept = current.filter(event => {
+      if (incoming.has(event.sourceId) && isStatusDowngrade(event, incoming.get(event.sourceId))) {
+        protectedIds.add(event.sourceId);
+        return true;
+      }
       const replace = isTranscriptSessionEvent(event) &&
         event.deviceId === cfg.deviceId &&
         event.provider === provider &&
@@ -655,6 +668,7 @@ function replayReplacementPlan(cfg, provider, sessionIds, events, turnIds) {
     if (kept.length !== current.length) nextByFile.set(file, kept);
   }
   for (const event of events) {
+    if (protectedIds.has(event.sourceId)) continue;
     const clean = sanitizeEvent(event);
     const file = eventFile(cfg, utcDateKey(new Date(clean.tsUtc || clean.ts)));
     const next = nextByFile.get(file) || loadEvents(file);
@@ -828,6 +842,12 @@ async function ingestSessionFile(cfg, source, cursors) {
     ? [source.predecessor]
     : Object.keys(cursors.files).filter(key => key !== file && canonicalSessionPath(key) === file);
   const stored = cursors.files[file] || cursors.files[aliases[0]] || {};
+  // A compressed rollout is never appended to; decompressing it again would only re-read the same bytes.
+  const stat = file.endsWith('.zst') ? (({ size, mtimeMs }) => ({ size, mtimeMs }))(fs.statSync(file)) : undefined;
+  if (stat && cursors.files[file] && stored.parserVersion === SESSION_PARSER_VERSION &&
+      JSON.stringify(stored.stat) === JSON.stringify(stat) && !fs.existsSync(quarantineFile(cfg, file))) {
+    return { changed: 0, failures: 0 };
+  }
   // A moved transcript may not be byte-identical at the old offset, so its successor always replays.
   const restart = stored.parserVersion !== SESSION_PARSER_VERSION || (!!source.predecessor && !cursors.files[file]);
   const replay = Object.hasOwn(stored, 'parserVersion') && restart;
@@ -908,6 +928,7 @@ async function ingestSessionFile(cfg, source, cursors) {
       parserVersion: SESSION_PARSER_VERSION,
       state,
       sessionIds: [...sessionIds].sort(),
+      ...(stat ? { stat } : {}),
     };
   }
   const quarantine = quarantineFile(cfg, file);
@@ -955,10 +976,15 @@ function recordSuccessorFailure(cfg, source, failure) {
   return { changed: 0, failures: 1 };
 }
 
+function zstdAvailable() {
+  return typeof zlib.createZstdDecompress === 'function';
+}
+
 function sessionSuccessor(file) {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
   const archived = path.join(codexHome, 'archived_sessions', path.basename(file));
-  return [file + '.zst', archived, archived + '.zst'].find(candidate => fs.existsSync(candidate));
+  return [file + '.zst', archived, archived + '.zst']
+    .find(candidate => fs.existsSync(candidate) && (zstdAvailable() || !candidate.endsWith('.zst')));
 }
 
 // Codex compresses old rollouts to `.jsonl.zst` or moves them to archived_sessions; a quarantine on the
@@ -974,7 +1000,6 @@ function movedQuarantineSources(cfg, cursors) {
     if (!predecessor || cursors[predecessor].provider !== 'codex' || fs.existsSync(predecessor)) continue;
     const successor = sessionSuccessor(predecessor);
     if (!successor) continue;
-    if (successor.endsWith('.zst') && typeof zlib.createZstdDecompress !== 'function') continue;
     const { size, mtimeMs } = fs.statSync(successor);
     const stat = { parserVersion: SESSION_PARSER_VERSION, size, mtimeMs };
     if (JSON.stringify(entry.successorAttempt) === JSON.stringify(stat)) continue;
@@ -1073,7 +1098,9 @@ function findJsonlFiles(root, provider, files = []) {
     if (entry.name === 'subagents') continue;
     const target = path.join(root, entry.name);
     if (entry.isDirectory()) findJsonlFiles(target, provider, files);
-    else if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push({ provider, path: target });
+    else if (entry.isFile() && (entry.name.endsWith('.jsonl') || (entry.name.endsWith('.jsonl.zst') && zstdAvailable()))) {
+      files.push({ provider, path: target });
+    }
   }
   return files;
 }
@@ -1082,6 +1109,7 @@ function discoverSessionSources() {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
   return [
     ...findJsonlFiles(path.join(codexHome, 'sessions'), 'codex'),
+    ...findJsonlFiles(path.join(codexHome, 'archived_sessions'), 'codex'),
     ...findJsonlFiles(path.join(os.homedir(), '.claude', 'projects'), 'claude'),
   ];
 }
@@ -1091,7 +1119,10 @@ async function ingestKnownSessions(cfg, discover = false) {
   const sources = discover ? [...known, ...discoverSessionSources()] : known;
   const unique = [...new Map(sources.map(source => {
     const file = canonicalSessionPath(source.path);
-    return [file, { ...source, path: file }];
+    // Codex compresses or archives finished rollouts; follow the move instead of dropping the source.
+    const moved = source.provider === 'codex' && !fs.existsSync(file) ? sessionSuccessor(file) : undefined;
+    const target = moved ? canonicalSessionPath(moved) : file;
+    return [target, { ...source, path: target }];
   })).values()]
     .filter(source => fs.existsSync(source.path));
   writeJson(sessionSourcesFile(cfg), unique);

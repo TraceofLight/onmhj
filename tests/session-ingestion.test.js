@@ -290,7 +290,7 @@ test('a parser version change restarts stale cursor state', async () => {
 
   assert.deepEqual(result, { changed: 0, failures: 0 });
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
-  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 11);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 12);
 });
 
 test('a successful parser replay replaces stale local turns in its session scope', async () => {
@@ -388,7 +388,7 @@ test('a successful parser replay replaces stale local turns in its session scope
   assert.ok(stagedModes.every(mode => mode === 0o600));
   assert.ok(replayLocks.length > 0);
   assert.ok(replayLocks.every(Boolean));
-  assert.equal(cursor.parserVersion, 11);
+  assert.equal(cursor.parserVersion, 12);
   assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
 });
 
@@ -777,6 +777,90 @@ test('an unfinished retry at the end of a transcript keeps the errored turn resu
     [['original', 'complete', 'partial']]);
 });
 
+function codexTurnRecords(sessionId, turnId, prompt, complete = true) {
+  return [
+    { type: 'session_meta', payload: { id: sessionId } },
+    { timestamp: '2026-07-13T01:00:00.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: turnId } },
+    { type: 'event_msg', payload: { type: 'user_message', message: prompt } },
+    ...(complete ? [{ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'done' } }] : []),
+  ];
+}
+
+function writeRecords(file, records) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, records.map(item => JSON.stringify(item)).join('\n') + '\n');
+}
+
+test('a truncated copy never downgrades a completed turn, in upsert or replay', async () => {
+  const stateDir = tempDir();
+  const full = path.join(stateDir, 'full.jsonl');
+  const truncated = path.join(stateDir, 'truncated.jsonl');
+  writeRecords(full, codexTurnRecords('shared', 'turn', 'task'));
+  writeRecords(truncated, codexTurnRecords('shared', 'turn', 'task', false));
+  const sources = [{ provider: 'codex', path: full }, { provider: 'codex', path: truncated }];
+  await onmhj.ingestSessionFiles(cfg(stateDir), sources);
+  assert.deepEqual(readEvents(stateDir).map(event => event.status), ['complete']);
+
+  const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
+  const cursors = JSON.parse(fs.readFileSync(cursorFile, 'utf8'));
+  for (const entry of Object.values(cursors.files)) entry.parserVersion = 0;
+  fs.writeFileSync(cursorFile, JSON.stringify(cursors));
+  await onmhj.ingestSessionFiles(cfg(stateDir), sources);
+  assert.deepEqual(readEvents(stateDir).map(event => [event.status, event.assistantResponse]), [['complete', 'done']]);
+});
+
+test('discovery follows compressed and archived Codex rollouts and skips unchanged compressed files',
+  { skip: typeof zlib.zstdCompressSync !== 'function' }, async () => {
+    const stateDir = tempDir();
+    const codexHome = path.join(stateDir, 'codex');
+    const home = path.join(stateDir, 'home');
+    fs.mkdirSync(home, { recursive: true });
+    await withCodexHome(codexHome, async () => {
+      const previousHome = process.env.HOME;
+      process.env.HOME = home;
+      try {
+        const live = path.join(codexHome, 'sessions', '2026', '07', '13', 'rollout-2026-07-13T01-00-00-live.jsonl');
+        writeRecords(live, codexTurnRecords('live', 'live-turn', 'live task'));
+        const compressed = path.join(codexHome, 'sessions', '2026', '07', '12', 'rollout-2026-07-12T01-00-00-old.jsonl.zst');
+        fs.mkdirSync(path.dirname(compressed), { recursive: true });
+        fs.writeFileSync(compressed, zlib.zstdCompressSync(Buffer.from(
+          codexTurnRecords('old', 'old-turn', 'old task').map(item => JSON.stringify(item)).join('\n') + '\n')));
+        writeRecords(path.join(codexHome, 'archived_sessions', 'rollout-2026-07-11T01-00-00-archived.jsonl'),
+          codexTurnRecords('archived', 'archived-turn', 'archived task'));
+        await onmhj.ingestKnownSessions(cfg(stateDir), true);
+        assert.deepEqual(readEvents(stateDir).map(event => event.prompt).sort(), ['archived task', 'live task', 'old task']);
+
+        const compressedLive = live + '.zst';
+        fs.writeFileSync(compressedLive, zlib.zstdCompressSync(fs.readFileSync(live)));
+        fs.unlinkSync(live);
+        await onmhj.ingestKnownSessions(cfg(stateDir));
+        const sources = JSON.parse(fs.readFileSync(path.join(stateDir, 'session-ingest', 'sources.json'))).map(item => item.path);
+        assert.ok(sources.includes(path.resolve(compressedLive)));
+        assert.ok(!sources.includes(path.resolve(live)));
+
+        const opened = [];
+        const original = fs.createReadStream;
+        fs.createReadStream = (file, ...rest) => { opened.push(String(file)); return original(file, ...rest); };
+        try {
+          await onmhj.ingestKnownSessions(cfg(stateDir));
+        } finally {
+          fs.createReadStream = original;
+        }
+        assert.deepEqual(opened.filter(file => file.endsWith('.zst')), []);
+
+        // A quarantined compressed file is retried even when unchanged, so a transient read error can clear.
+        const quarantineDir = path.join(stateDir, 'session-ingest', 'quarantine');
+        fs.mkdirSync(quarantineDir, { recursive: true });
+        const failed = path.join(quarantineDir, crypto.createHash('sha256').update(path.resolve(compressed)).digest('hex').slice(0, 16) + '.json');
+        fs.writeFileSync(failed, JSON.stringify({ affectedDate: '2026-07-12', code: 'session_read_error' }));
+        await onmhj.ingestKnownSessions(cfg(stateDir));
+        assert.equal(fs.existsSync(failed), false);
+      } finally {
+        process.env.HOME = previousHome;
+      }
+    });
+  });
+
 async function quarantineMovedTranscript(stateDir, codexHome) {
   const original = path.join(codexHome, 'sessions', '2026', '07', '13', 'rollout-2026-07-13T01-00-00-moved.jsonl');
   const lines = fs.readFileSync(path.join(__dirname, 'fixtures', 'codex-transcript.jsonl'), 'utf8').trim().split('\n');
@@ -823,7 +907,9 @@ for (const [name, successor, encode] of [
         assert.deepEqual(fs.readdirSync(path.join(ingestDir, 'quarantine')), []);
         assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(ingestDir, 'cursors.json'))).files),
           [path.resolve(target)]);
-        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ingestDir, 'sources.json'))), []);
+        // The vanished live path is replaced by its successor so later ingests keep following it.
+        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ingestDir, 'sources.json'))),
+          [{ provider: 'codex', path: path.resolve(target) }]);
         const events = readEvents(stateDir);
         assert.equal(events.length, 1);
         assert.equal(events[0].prompt, 'actual user task');
@@ -1044,7 +1130,7 @@ test('raw session publish reconciles current-device sessions without touching un
     files: {
       'claude-transcript.jsonl': {
         provider: 'claude',
-        parserVersion: 11,
+        parserVersion: 12,
         sessionIds: ['reconciled-session'],
       },
     },

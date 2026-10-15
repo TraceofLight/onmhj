@@ -37,6 +37,26 @@ function codexDelegationInput(payload) {
   return match[1].replace(/&(?:lt|gt|quot|apos|#39|amp);/g, entity => XML_ENTITIES[entity]).trim();
 }
 
+// Codex CLI before 0.142.3 wrote the human prompt only as a metadata-less user message.
+const CODEX_LEGACY_BEFORE = [0, 142, 3];
+const CODEX_LEGACY_IGNORED_PREFIXES = [...CODEX_INTERNAL_CONTEXT_PREFIXES, '<turn_aborted>', '<image', '</image>'];
+
+function codexLegacyVersion(version) {
+  const match = String(version || '').match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const parts = match.slice(1).map(Number);
+  const index = parts.findIndex((part, i) => part !== CODEX_LEGACY_BEFORE[i]);
+  return index >= 0 && parts[index] < CODEX_LEGACY_BEFORE[index];
+}
+
+function codexUserPrompt(content, ignoredPrefixes) {
+  const text = content
+    .filter(block => block.type === 'input_text' && !ignoredPrefixes.some(prefix => block.text.trimStart().startsWith(prefix)))
+    .map(block => block.text)
+    .join('\n');
+  return text || (content.some(block => block.type === 'input_image') ? '[image]' : '');
+}
+
 function parseCodexRecord(record, previous = {}) {
   const state = { ...previous };
   const payload = record && record.payload;
@@ -49,6 +69,7 @@ function parseCodexRecord(record, previous = {}) {
       state.subagentTranscript = payload.thread_source === 'subagent' ||
         !!(payload.source && payload.source.subagent && payload.source.subagent.thread_spawn);
     }
+    if (state.legacyUserItems === undefined) state.legacyUserItems = codexLegacyVersion(payload.cli_version);
     state.sessionId = String(payload.session_id || payload.id || state.sessionId || '');
     state.cwd = String(payload.cwd || state.cwd || '');
     return { state, events: [] };
@@ -62,18 +83,17 @@ function parseCodexRecord(record, previous = {}) {
   }
 
   if (record.type === 'response_item' && payload.type === 'message' && state.turn) {
-    if (payload.role === 'user' && metadata && metadata.turn_id === state.turn.turnId) {
+    const linked = metadata && metadata.turn_id === state.turn.turnId;
+    if (payload.role === 'user' && (linked || (!metadata && state.legacyUserItems))) {
       if (!Array.isArray(payload.content) || !payload.content.every(block => block &&
           ((block.type === 'input_text' && typeof block.text === 'string') || block.type === 'input_image'))) {
         parserError('codex_invalid_user_message');
       }
-      const text = payload.content
-        .filter(block => block.type === 'input_text' && !CODEX_INTERNAL_CONTEXT_PREFIXES.some(
-          prefix => block.text.trimStart().startsWith(prefix)))
-        .map(block => block.text)
-        .join('\n');
-      const prompt = text || (payload.content.some(block => block.type === 'input_image') ? '[image]' : '');
-      if (prompt && !state.turn.prompt) state.turn = { ...state.turn, prompt };
+      const prompt = codexUserPrompt(payload.content, linked ? CODEX_INTERNAL_CONTEXT_PREFIXES : CODEX_LEGACY_IGNORED_PREFIXES);
+      // A metadata-linked prompt stays authoritative over one taken from a legacy item.
+      if (prompt && (!state.turn.prompt || (linked && state.turn.legacyPrompt))) {
+        state.turn = { ...state.turn, prompt, legacyPrompt: !linked };
+      }
     }
     if (payload.role === 'developer' && Array.isArray(payload.content) && payload.content.some(
       block => block.type === 'input_text' && typeof block.text === 'string' &&

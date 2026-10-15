@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Read human prompts from legacy Codex rollouts (CLI before 0.142.3) that store them only as metadata-less user messages.
+- Discovered compressed `.jsonl.zst` and `archived_sessions` Codex rollouts, followed known rollouts when Codex moves them, and skipped unchanged compressed files.
+- Kept completed turns when a truncated copy of the same turn arrives as pending.
 - Asked intermediate reductions for 60% of each size limit and accepted outputs that overshoot the limit but still shrink their input, because the model tracks byte budgets only loosely.
 - Checked intermediate output size after evidence and reference validation so other violations are still retried.
 - Gave each intermediate reduction group an equal share of the target so reduction converges even when the model compresses only to the requested budget.

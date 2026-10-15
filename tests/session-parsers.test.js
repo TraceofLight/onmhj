@@ -327,6 +327,37 @@ test('Codex prompt-less retries after an errored turn continue the original huma
   assert.equal(followed.state.retryTurn, undefined);
 });
 
+test('legacy Codex rollouts take the first metadata-less user item as the prompt', () => {
+  const meta = version => ({ type: 'session_meta', payload: { id: 'legacy', cli_version: version } });
+  const start = { type: 'event_msg', timestamp: '2026-03-19T08:00:00Z', payload: { type: 'task_started', turn_id: 'turn' } };
+  const user = (...texts) => ({ type: 'response_item', payload: { type: 'message', role: 'user',
+    content: texts.map(text => (text === '<image>' ? { type: 'input_image' } : { type: 'input_text', text })) } });
+  const work = { type: 'response_item', payload: { type: 'reasoning' } };
+  const finish = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } };
+
+  const plain = parse([meta('0.116.0'), start, user('<environment_context>\n  <cwd>/x</cwd>'), user('real question'),
+    work, user('follow-up'), finish], parseCodexRecord).events;
+  assert.deepEqual(plain.map(event => [event.prompt, event.assistantResponse]), [['real question', 'answer']]);
+
+  const wrapped = parse([meta('0.142.0'), start, user('<turn_aborted> The user interrupted'),
+    user('<image name=[Image #1]>', '<image>', '</image>', '[Image #1] what is this?'), work, finish], parseCodexRecord).events;
+  assert.equal(wrapped[0].prompt, '[Image #1] what is this?');
+  const imageOnly = parse([meta('0.133.0'), start, user('<image name=[Image #1]>', '<image>', '</image>'), work, finish],
+    parseCodexRecord).events;
+  assert.equal(imageOnly[0].prompt, '[image]');
+
+  const linked = { type: 'response_item', payload: { type: 'message', role: 'user',
+    content: [{ type: 'input_text', text: 'linked prompt' }], internal_chat_message_metadata_passthrough: { turn_id: 'turn' } } };
+  assert.equal(parse([meta('0.142.0'), start, user('plain first'), linked, work, finish], parseCodexRecord).events[0].prompt,
+    'linked prompt');
+
+  for (const version of ['0.142.3', '0.162.0-alpha.17.2', undefined, 'not-a-version']) {
+    const records = [version === undefined ? { type: 'session_meta', payload: { id: 'modern' } } : meta(version),
+      start, user('unknown injected record'), work, finish];
+    assert.throws(() => parse(records, parseCodexRecord), err => err.code === 'codex_missing_user_message', String(version));
+  }
+});
+
 test('Codex parser recovers metadata-linked response users and preserves legacy prompts', () => {
   const start = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn' } };
   const finish = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } };
