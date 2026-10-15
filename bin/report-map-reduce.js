@@ -8,6 +8,7 @@ const MAP_CONCURRENCY = 3;
 const MAP_ATTEMPTS = 3;
 const MAP_PROMPT_VERSION = 3;
 const REDUCE_INPUT_BYTES = 64 * 1024;
+const FLOOR_OVERHEAD_BYTES = 512;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -172,6 +173,15 @@ function summaryChunk(summaries, index, count) {
   };
 }
 
+// Every output must cite every evidence ID; references are optional for validation but should survive,
+// and each kept reference cites at least one ID. Pricing a citation at the longest ID keeps any group's
+// floor at or below the floor of the whole input, which the round cap relies on.
+function evidenceFloorBytes(chunk, { keepReferences = false } = {}) {
+  const longest = chunk.evidenceIds.reduce((best, id) => (id.length > best.length ? id : best), '');
+  const references = keepReferences ? chunk.referenceUrls.map(url => ({ url, evidenceIds: [longest] })) : [];
+  return Buffer.byteLength(JSON.stringify({ evidenceIds: chunk.evidenceIds, references }));
+}
+
 async function reduceMapSummaries(options) {
   const {
     date,
@@ -181,12 +191,30 @@ async function reduceMapSummaries(options) {
     targetBytes = REDUCE_INPUT_BYTES,
   } = options;
   let reduced = summaries;
-  while (summaryBytes(reduced) > targetBytes) {
+  if (summaryBytes(reduced) <= targetBytes) return reduced;
+  const all = summaryChunk(reduced, 0, 1);
+  if (evidenceFloorBytes(all) >= targetBytes) throw new Error('evidence IDs exceed the reduction target');
+  // Below half the target every output fits two to a group, so the summary count halves each round.
+  const maxRounds = evidenceFloorBytes(all, { keepReferences: true }) + FLOOR_OVERHEAD_BYTES <= targetBytes / 2
+    ? Math.ceil(Math.log2(Math.max(reduced.length, 2))) + 2
+    : reduced.length + 2;
+  for (let round = 1; summaryBytes(reduced) > targetBytes; round += 1) {
+    if (round > maxRounds) throw new Error(`map summaries did not converge within ${maxRounds} reduction rounds`);
     const beforeBytes = summaryBytes(reduced);
     const groups = summaryChunks(reduced, targetBytes);
+    // An equal share of the target per group makes a round that meets every budget fit the target.
+    // ponytail: a group whose kept-reference floor exceeds its share keeps its floor and others are not
+    // given less, so a reference-heavy group above half the target stops at the round cap; redistribute the
+    // unused share if that happens on real days.
+    const share = Math.floor(targetBytes / groups.length);
     reduced = await mapLimit(groups, MAP_CONCURRENCY, async (group, index) => {
       const chunk = summaryChunk(group, index, groups.length);
-      chunk.maxOutputBytes = Math.min(targetBytes, chunk.bytes);
+      if (group.length === 1 && chunk.bytes <= share) return group[0];
+      chunk.maxOutputBytes = Math.min(
+        targetBytes,
+        chunk.bytes - 1,
+        Math.max(share, evidenceFloorBytes(chunk, { keepReferences: true }) + FLOOR_OVERHEAD_BYTES),
+      );
       return runValidatedPrompt(
         runPrompt,
         buildMapPrompt(date, language, chunk, { intermediate: true }),

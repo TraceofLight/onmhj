@@ -257,6 +257,184 @@ test('recompresses an oversized atomic summary', async () => {
   assert.deepEqual(reduced[0].tasks[0].evidenceIds, chunk.evidenceIds);
 });
 
+test('converges when the model compresses only as far as each requested budget', async () => {
+  const chunks = chunkRawEvents(rawEvents(24), { targetBytes: 1800 });
+  const summaries = chunks.map(chunk => {
+    const value = JSON.parse(summaryFor(chunk));
+    value.tasks[0].background = ['가'.repeat(150)];
+    return value;
+  });
+  const budgets = [];
+  const reduced = await reduceMapSummaries({
+    date: '2026-07-14',
+    summaries,
+    targetBytes: 1500,
+    // Returns the input unchanged when it already fits, otherwise merges and pads to just under the budget.
+    async runPrompt(_prompt, chunk) {
+      budgets.push(chunk.maxOutputBytes);
+      const inputs = chunk.raw.trim().split('\n').map(JSON.parse);
+      if (inputs.length === 1 && chunk.bytes - 1 < chunk.maxOutputBytes) return JSON.stringify({ ...inputs[0], chunkId: chunk.chunkId });
+      const value = {
+        schemaVersion: 1,
+        chunkId: chunk.chunkId,
+        tasks: [{
+          title: '병합', background: [''], process: [], decisions: [], results: [], followUps: [],
+          evidenceIds: chunk.evidenceIds, references: [],
+        }],
+      };
+      const room = chunk.maxOutputBytes - 1 - Buffer.byteLength(JSON.stringify(value));
+      value.tasks[0].background = ['가'.repeat(Math.max(0, Math.floor(room / 3)))];
+      return JSON.stringify(value);
+    },
+  });
+
+  assert.ok(summaryBytes(reduced) <= 1500);
+  assert.deepEqual(
+    [...new Set(reduced.flatMap(summary => summary.tasks.flatMap(task => task.evidenceIds)))].sort(),
+    chunks.flatMap(chunk => chunk.evidenceIds).sort(),
+  );
+});
+
+test('fails before any model call when evidence IDs alone exceed the reduction target', async () => {
+  const chunks = chunkRawEvents(rawEvents(12), { targetBytes: 1800 });
+  const summaries = chunks.map(chunk => JSON.parse(summaryFor(chunk)));
+  const floor = Buffer.byteLength(JSON.stringify({ evidenceIds: chunks.flatMap(chunk => chunk.evidenceIds), references: [] }));
+  let calls = 0;
+  await assert.rejects(
+    reduceMapSummaries({ date: '2026-07-14', summaries, targetBytes: floor, async runPrompt() { calls += 1; } }),
+    /evidence IDs exceed the reduction target/,
+  );
+  assert.equal(calls, 0);
+});
+
+test('stops within the round limit when the model never meets a budget that would converge', async () => {
+  const chunks = chunkRawEvents(rawEvents(24), { targetBytes: 1800 });
+  const summaries = chunks.map(chunk => JSON.parse(summaryFor(chunk)));
+  let calls = 0;
+  await assert.rejects(
+    reduceMapSummaries({
+      date: '2026-07-14',
+      summaries,
+      targetBytes: 2600,
+      // Keeps every evidence ID once per input summary, so outputs stay just above the floor of their inputs.
+      async runPrompt(_prompt, chunk) {
+        calls += 1;
+        const inputs = chunk.raw.trim().split('\n').map(JSON.parse);
+        return JSON.stringify({ schemaVersion: 1, chunkId: chunk.chunkId, tasks: inputs.flatMap(input => input.tasks) });
+      },
+    }),
+    /did not (converge|shrink)|map summary must be under/,
+  );
+  assert.ok(calls <= (summaries.length + 2) * summaries.length * 3);
+});
+
+test('keeps the halving bound when a summary sits exactly at half the target', async () => {
+  const chunks = chunkRawEvents(rawEvents(16), { targetBytes: 1800 });
+  const target = 6000;
+  const summaries = chunks.map(chunk => {
+    const value = JSON.parse(summaryFor(chunk));
+    value.tasks[0].background = [''];
+    value.tasks[0].background = ['x'.repeat(target / 2 - Buffer.byteLength(JSON.stringify(value)))];
+    return value;
+  });
+  assert.equal(Buffer.byteLength(JSON.stringify(summaries[0])), target / 2);
+  let firstCalls = 0;
+  const reduced = await reduceMapSummaries({
+    date: '2026-07-14',
+    summaries,
+    targetBytes: target,
+    async runPrompt(_prompt, chunk) {
+      if (chunk.index === 0) firstCalls += 1;
+      const value = {
+        schemaVersion: 1, chunkId: chunk.chunkId,
+        tasks: [{ title: 'm', background: [''], process: [], decisions: [], results: [], followUps: [], evidenceIds: chunk.evidenceIds, references: [] }],
+      };
+      value.tasks[0].background = ['x'.repeat(Math.max(0, chunk.maxOutputBytes - 1 - Buffer.byteLength(JSON.stringify(value))))];
+      return JSON.stringify(value);
+    },
+  });
+  assert.ok(summaryBytes(reduced) <= target);
+  assert.ok(firstCalls <= Math.ceil(Math.log2(summaries.length)) + 2);
+});
+
+test('budgets room for every kept reference when references dominate a group', async () => {
+  const chunks = chunkRawEvents(rawEvents(8), { targetBytes: 1800 });
+  const urls = Array.from({ length: 60 }, (_, index) => `https://example.com/reference/${index}`);
+  const summaries = chunks.map((chunk, index) => {
+    const value = JSON.parse(summaryFor(chunk));
+    value.tasks[0].background = ['가'.repeat(400)];
+    value.tasks[0].references = (index === 0 ? urls : []).map(url => ({ url, title: '', evidenceIds: chunk.evidenceIds.slice(0, 1) }));
+    return value;
+  });
+  const reduced = await reduceMapSummaries({
+    date: '2026-07-14',
+    summaries,
+    targetBytes: 6000,
+    async runPrompt(_prompt, chunk) {
+      const inputs = chunk.raw.trim().split('\n').map(JSON.parse);
+      return JSON.stringify({
+        schemaVersion: 1,
+        chunkId: chunk.chunkId,
+        tasks: [{
+          title: 'm', background: [], process: [], decisions: [], results: [], followUps: [],
+          evidenceIds: chunk.evidenceIds,
+          references: inputs.flatMap(input => input.tasks.flatMap(task => task.references))
+            .map(reference => ({ url: reference.url, evidenceIds: reference.evidenceIds })),
+        }],
+      });
+    },
+  });
+  assert.ok(summaryBytes(reduced) <= 6000);
+  assert.equal(new Set(reduced.flatMap(summary => summary.tasks.flatMap(task => task.references.map(reference => reference.url)))).size, 60);
+});
+
+test('does not fail fast because of optional references when evidence IDs alone fit', async () => {
+  const chunks = chunkRawEvents(rawEvents(8), { targetBytes: 1800 });
+  const urls = Array.from({ length: 200 }, (_, index) => `https://example.com/reference/${index}`);
+  const summaries = chunks.map((chunk, index) => {
+    const value = JSON.parse(summaryFor(chunk));
+    value.tasks[0].references = (index === 0 ? urls : []).map(url => ({ url, evidenceIds: chunk.evidenceIds.slice(0, 1) }));
+    return value;
+  });
+  const reduced = await reduceMapSummaries({
+    date: '2026-07-14',
+    summaries,
+    targetBytes: 3000,
+    async runPrompt(_prompt, chunk) {
+      return JSON.stringify({
+        schemaVersion: 1, chunkId: chunk.chunkId,
+        tasks: [{ title: 'm', background: [], process: [], decisions: [], results: [], followUps: [], evidenceIds: chunk.evidenceIds, references: [] }],
+      });
+    },
+  });
+  assert.ok(summaryBytes(reduced) <= 3000);
+});
+
+test('fails within the linear round cap when a reference-heavy group cannot shrink further', async () => {
+  const longId = 'b'.repeat(200);
+  const summary = (id, background, urls) => ({
+    schemaVersion: 1, chunkId: `sha256:${id.slice(0, 8)}`,
+    tasks: [{ title: 't', background: [background], process: [], decisions: [], results: [], followUps: [],
+      evidenceIds: [id], references: urls.map(url => ({ url, evidenceIds: [id] })) }],
+  });
+  const urls = Array.from({ length: 100 }, (_, index) => `https://example.com/r/${index}`);
+  const summaries = [summary('a', 'x'.repeat(30000), []), summary(longId, 'y'.repeat(9000), urls)];
+  let calls = 0;
+  // Keeps every reference and shrinks only to the budget, so the reference-heavy group stays above half the target.
+  await assert.rejects(reduceMapSummaries({
+    date: '2026-07-14', summaries, targetBytes: 40000,
+    async runPrompt(_prompt, chunk) {
+      calls += 1;
+      const inputs = chunk.raw.trim().split('\n').map(JSON.parse);
+      const value = { schemaVersion: 1, chunkId: chunk.chunkId, tasks: inputs.flatMap(input => input.tasks)
+        .map(task => ({ ...task, background: [''] })) };
+      value.tasks[0].background = ['z'.repeat(Math.max(0, chunk.maxOutputBytes - 1 - Buffer.byteLength(JSON.stringify(value))))];
+      return JSON.stringify(value);
+    },
+  }), /did not converge within 4 reduction rounds/);
+  assert.ok(calls <= 4 * 2);
+});
+
 test('rejects intermediate summaries that exceed the shrinking output limit', async () => {
   const chunks = chunkRawEvents(rawEvents(8), { targetBytes: 1800 });
   const summaries = chunks.map(chunk => JSON.parse(summaryFor(chunk)));

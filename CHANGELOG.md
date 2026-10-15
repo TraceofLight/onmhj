@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Gave each intermediate reduction group an equal share of the target so reduction converges even when the model compresses only to the requested budget.
+- Failed fast when evidence IDs alone exceed the reduction target and bounded reduction rounds.
 - Recorded Codex cross-thread delegation turns with the delegated input as the prompt.
 - Linked prompt-less Codex retries after an errored turn to the original human turn.
 - Replayed quarantined Codex transcripts from their `.jsonl.zst` or `archived_sessions` successor once per file change.
