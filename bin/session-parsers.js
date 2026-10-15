@@ -26,6 +26,17 @@ function codexContextOnlyUser(payload) {
   });
 }
 
+const XML_ENTITIES = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&#39;': "'", '&amp;': '&' };
+
+function codexDelegationInput(payload) {
+  if (payload.type !== 'function_call_output' || payload.namespace !== 'codex_app' ||
+      payload.name !== 'send_message_to_thread' || typeof payload.output !== 'string' ||
+      !payload.output.trimStart().startsWith('<codex_delegation>')) return undefined;
+  const match = payload.output.match(/<input>([\s\S]*?)<\/input>/);
+  if (!match) parserError('codex_invalid_delegation');
+  return match[1].replace(/&(?:lt|gt|quot|apos|#39|amp);/g, entity => XML_ENTITIES[entity]).trim();
+}
+
 function parseCodexRecord(record, previous = {}) {
   const state = { ...previous };
   const payload = record && record.payload;
@@ -43,8 +54,14 @@ function parseCodexRecord(record, previous = {}) {
     return { state, events: [] };
   }
 
+  const metadata = payload.internal_chat_message_metadata_passthrough;
+  if (record.type === 'response_item' && state.turn && !state.subagentTranscript && !state.turn.prompt &&
+      metadata && metadata.turn_id === state.turn.turnId) {
+    const delegated = codexDelegationInput(payload);
+    if (delegated) state.turn = { ...state.turn, prompt: delegated };
+  }
+
   if (record.type === 'response_item' && payload.type === 'message' && state.turn) {
-    const metadata = payload.internal_chat_message_metadata_passthrough;
     if (payload.role === 'user' && metadata && metadata.turn_id === state.turn.turnId) {
       if (!Array.isArray(payload.content) || !payload.content.every(block => block &&
           ((block.type === 'input_text' && typeof block.text === 'string') || block.type === 'input_image'))) {
@@ -83,7 +100,8 @@ function parseCodexRecord(record, previous = {}) {
   if (record.type !== 'event_msg') return { state, events: [] };
   if (payload.type === 'task_started') {
     if (typeof payload.turn_id !== 'string') parserError('codex_invalid_task_started');
-    const continuation = state.turn?.prompt ? state.turn : state.turn?.continuation;
+    const continuation = (state.turn?.prompt ? state.turn : state.turn?.continuation) || state.retryTurn;
+    delete state.retryTurn;
     state.turn = {
       sessionId: state.sessionId || '',
       turnId: payload.turn_id,
@@ -98,6 +116,7 @@ function parseCodexRecord(record, previous = {}) {
 
   if (payload.type === 'user_message') {
     if (typeof payload.message !== 'string') parserError('codex_invalid_user_message');
+    delete state.retryTurn;
     state.turn = state.turn || {
       sessionId: state.sessionId || '',
       turnId: String(payload.client_id || record.timestamp || ''),
@@ -120,16 +139,20 @@ function parseCodexRecord(record, previous = {}) {
     ? state.turn.continuation : state.turn;
   const assistantResponse = typeof payload.last_agent_message === 'string'
     ? payload.last_agent_message
-    : state.turn.assistantResponse;
+    : state.turn.assistantResponse || (turn.emitted ? turn.assistantResponse : '');
+  // An errored completion is retried by the client as a prompt-less turn; link it back to the human turn.
+  const retryTurn = payload.error && (turn.prompt ? { ...turn, assistantResponse, emitted: true } : state.turn.continuation);
   if (typeof turn.prompt !== 'string' || !turn.prompt) {
     if (turn.internal || state.subagentTranscript || !turn.sawIntermediate) {
       delete state.turn;
+      if (retryTurn) state.retryTurn = retryTurn;
       return { state, events: [] };
     }
     parserError('codex_missing_user_message');
   }
   if (typeof assistantResponse !== 'string') parserError('codex_invalid_task_complete');
   delete state.turn;
+  if (retryTurn) state.retryTurn = retryTurn;
   const event = {
     provider: 'codex',
     sessionId: turn.sessionId,

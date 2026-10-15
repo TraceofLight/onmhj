@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Recorded Codex cross-thread delegation turns with the delegated input as the prompt.
+- Linked prompt-less Codex retries after an errored turn to the original human turn.
+- Replayed quarantined Codex transcripts from their `.jsonl.zst` or `archived_sessions` successor once per file change.
+- Reported remaining quarantine entries as `sessions` failures.
+- Limited Codex parser replay replacement to the turns a transcript emits again, so spawned threads that share a session id no longer erase turns recorded from other threads.
 - Bounded final report reduction with validated intermediate summaries when map output exceeds the final-input limit.
 - Preserved every evidence ID through intermediate reduction and rejected oversized intermediate output.
 - Prevented live long-running workers from being replaced solely because their lock timestamp is older than six hours.

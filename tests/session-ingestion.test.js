@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 
 const onmhj = require('../bin/onmhj');
 
@@ -289,7 +290,7 @@ test('a parser version change restarts stale cursor state', async () => {
 
   assert.deepEqual(result, { changed: 0, failures: 0 });
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
-  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 10);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 11);
 });
 
 test('a successful parser replay replaces stale local turns in its session scope', async () => {
@@ -387,7 +388,7 @@ test('a successful parser replay replaces stale local turns in its session scope
   assert.ok(stagedModes.every(mode => mode === 0o600));
   assert.ok(replayLocks.length > 0);
   assert.ok(replayLocks.every(Boolean));
-  assert.equal(cursor.parserVersion, 10);
+  assert.equal(cursor.parserVersion, 11);
   assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
 });
 
@@ -725,6 +726,155 @@ test('parse failure stops the cursor, stores metadata only, and clears after ret
   assert.equal(completed.at(-1).changed, 1);
 });
 
+test('replaying one Codex thread keeps turns recorded from sibling threads of the same session', async () => {
+  const stateDir = tempDir();
+  const parentId = '01a0c7b0-0000-7000-8000-000000000001';
+  const childId = '01a11005-0000-7000-8000-000000000002';
+  const parent = path.join(stateDir, `rollout-2026-07-13T01-00-00-${parentId}.jsonl`);
+  const child = path.join(stateDir, `rollout-2026-07-13T02-00-00-${childId}.jsonl`);
+  const turn = (id, prompt) => [
+    { timestamp: '2026-07-13T01:00:01.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: id } },
+    { type: 'event_msg', payload: { type: 'user_message', message: prompt } },
+    { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } },
+  ];
+  const write = (file, records) => fs.writeFileSync(file, records.map(item => JSON.stringify(item)).join('\n') + '\n');
+  write(parent, [{ type: 'session_meta', payload: { id: parentId } }, ...turn('forked-turn', 'parent task'),
+    ...turn('after-fork', 'later parent task')]);
+  const copiedUnfinished = [
+    { timestamp: '2026-07-13T01:00:01.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'after-fork' } },
+    { type: 'event_msg', payload: { type: 'user_message', message: 'later parent task' } },
+  ];
+  write(child, [{ type: 'session_meta', payload: { session_id: parentId, id: childId, parent_thread_id: parentId } },
+    ...turn('forked-turn', 'parent task'), ...copiedUnfinished, ...turn('child-turn', 'child task')]);
+  const sources = [{ provider: 'codex', path: parent }, { provider: 'codex', path: child }];
+  await onmhj.ingestSessionFiles(cfg(stateDir), sources);
+  assert.deepEqual(readEvents(stateDir).map(event => event.turnId).sort(), ['after-fork', 'child-turn', 'forked-turn']);
+
+  const cursorFile = path.join(stateDir, 'session-ingest', 'cursors.json');
+  const cursors = JSON.parse(fs.readFileSync(cursorFile, 'utf8'));
+  for (const entry of Object.values(cursors.files)) entry.parserVersion = 0;
+  fs.writeFileSync(cursorFile, JSON.stringify(cursors));
+  await onmhj.ingestSessionFiles(cfg(stateDir), sources);
+  assert.deepEqual(readEvents(stateDir).map(event => event.turnId).sort(), ['after-fork', 'child-turn', 'forked-turn']);
+});
+
+test('an unfinished retry at the end of a transcript keeps the errored turn result', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'codex.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'session_meta', payload: { id: 'retry-session' } },
+    { timestamp: '2026-07-13T01:00:00.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'original' } },
+    { type: 'event_msg', payload: { type: 'user_message', message: 'human request' } },
+    { type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: 'partial' } },
+    { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: null, error: { codex_error_info: 'server_overloaded' } } },
+    { timestamp: '2026-07-13T01:00:10.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'retry' } },
+    { type: 'event_msg', payload: { type: 'token_count' } },
+  ].map(item => JSON.stringify(item)).join('\n') + '\n');
+  assert.deepEqual(await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]),
+    { changed: 1, failures: 0 });
+  const events = readEvents(stateDir);
+  assert.deepEqual(events.map(event => [event.turnId, event.status, event.assistantResponse]),
+    [['original', 'complete', 'partial']]);
+});
+
+async function quarantineMovedTranscript(stateDir, codexHome) {
+  const original = path.join(codexHome, 'sessions', '2026', '07', '13', 'rollout-2026-07-13T01-00-00-moved.jsonl');
+  const lines = fs.readFileSync(path.join(__dirname, 'fixtures', 'codex-transcript.jsonl'), 'utf8').trim().split('\n');
+  fs.mkdirSync(path.dirname(original), { recursive: true });
+  fs.writeFileSync(original, lines.slice(0, 4).join('\n') + '\n{"truncated":\n');
+  const ingestDir = path.join(stateDir, 'session-ingest');
+  fs.mkdirSync(ingestDir, { recursive: true });
+  fs.writeFileSync(path.join(ingestDir, 'sources.json'), JSON.stringify([{ provider: 'codex', path: original }]));
+  const failed = await onmhj.ingestKnownSessions(cfg(stateDir));
+  assert.equal(failed.failures, 1);
+  fs.unlinkSync(original);
+  return { original, complete: lines.join('\n') + '\n' };
+}
+
+function withCodexHome(codexHome, fn) {
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+  return Promise.resolve().then(fn).finally(() => {
+    if (previous === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous;
+  });
+}
+
+for (const [name, successor, encode] of [
+  ['compressed in place', original => original + '.zst', text => zlib.zstdCompressSync(Buffer.from(text))],
+  ['moved to archived_sessions', (original, codexHome) => path.join(codexHome, 'archived_sessions', path.basename(original)),
+    text => text],
+]) {
+  test(`quarantined transcript ${name} replays once from its successor and clears the block`,
+    { skip: typeof zlib.zstdCompressSync !== 'function' }, async () => {
+      const stateDir = tempDir();
+      const codexHome = path.join(stateDir, 'codex');
+      await withCodexHome(codexHome, async () => {
+        const { original, complete } = await quarantineMovedTranscript(stateDir, codexHome);
+        const target = successor(original, codexHome);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, encode(complete));
+        assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), true);
+
+        const result = await onmhj.ingestKnownSessions(cfg(stateDir));
+        const ingestDir = path.join(stateDir, 'session-ingest');
+        assert.equal(result.failures, 0);
+        assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), false);
+        assert.deepEqual(fs.readdirSync(path.join(ingestDir, 'quarantine')), []);
+        assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(ingestDir, 'cursors.json'))).files),
+          [path.resolve(target)]);
+        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ingestDir, 'sources.json'))), []);
+        const events = readEvents(stateDir);
+        assert.equal(events.length, 1);
+        assert.equal(events[0].prompt, 'actual user task');
+        assert.equal(events[0].status, 'complete');
+      });
+    });
+}
+
+test('quarantine without a successor keeps blocking, and a failed successor is not re-read until it changes',
+  { skip: typeof zlib.zstdCompressSync !== 'function' }, async () => {
+    const stateDir = tempDir();
+    const codexHome = path.join(stateDir, 'codex');
+    await withCodexHome(codexHome, async () => {
+      const { original } = await quarantineMovedTranscript(stateDir, codexHome);
+      assert.equal((await onmhj.ingestKnownSessions(cfg(stateDir))).failures, 1);
+      assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), true);
+
+      fs.writeFileSync(original + '.zst', Buffer.from('not zstd data'));
+      assert.equal((await onmhj.ingestKnownSessions(cfg(stateDir))).failures, 1);
+      fs.writeFileSync(original + '.zst', zlib.zstdCompressSync(Buffer.from('{"still broken"\n')));
+      assert.equal((await onmhj.ingestKnownSessions(cfg(stateDir))).failures, 1);
+      assert.equal((await onmhj.ingestKnownSessions(cfg(stateDir))).failures, 1);
+      assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), true);
+      const logDir = path.join(stateDir, 'internal');
+      const logs = fs.readdirSync(logDir).flatMap(name => fs.readFileSync(path.join(logDir, name), 'utf8').trim().split('\n'))
+        .map(JSON.parse);
+      assert.deepEqual(logs.filter(item => item.action === 'session_successor_attempted').map(item => item.code),
+        ['session_read_error', 'invalid_json']);
+      assert.equal(JSON.stringify(logs).includes(original), false);
+    });
+  });
+
+test('compressed successor keeps the block when the runtime lacks zstd',
+  { skip: typeof zlib.zstdCompressSync !== 'function' }, async () => {
+    const stateDir = tempDir();
+    const codexHome = path.join(stateDir, 'codex');
+    const original = Object.getOwnPropertyDescriptor(zlib, 'createZstdDecompress');
+    await withCodexHome(codexHome, async () => {
+      const moved = await quarantineMovedTranscript(stateDir, codexHome);
+      fs.writeFileSync(moved.original + '.zst', zlib.zstdCompressSync(Buffer.from(moved.complete)));
+      Object.defineProperty(zlib, 'createZstdDecompress', { ...original, value: undefined });
+      try {
+        assert.equal((await onmhj.ingestKnownSessions(cfg(stateDir))).failures, 1);
+      } finally {
+        Object.defineProperty(zlib, 'createZstdDecompress', original);
+      }
+      assert.equal(onmhj.hasSessionFailure(cfg(stateDir), '2026-07-13'), true);
+      assert.equal((await onmhj.ingestKnownSessions(cfg(stateDir))).failures, 0);
+    });
+  });
+
 test('raw session publish merges multiple dates in one commit without report changes', () => {
   const root = tempDir();
   const stateDir = path.join(root, 'state');
@@ -894,7 +1044,7 @@ test('raw session publish reconciles current-device sessions without touching un
     files: {
       'claude-transcript.jsonl': {
         provider: 'claude',
-        parserVersion: 10,
+        parserVersion: 11,
         sessionIds: ['reconciled-session'],
       },
     },

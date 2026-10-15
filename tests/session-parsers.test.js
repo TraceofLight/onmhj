@@ -46,6 +46,11 @@ test('Codex continuation completes the unfinished human turn with its original i
     { type: 'event_msg', payload: { type: 'task_complete' } },
   ]);
   assert.equal(parse(fallback, parseCodexRecord).events[0].assistantResponse, 'current answer');
+  const unanswered = records.slice(0, 2).concat([
+    { type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: 'earlier answer' } },
+    records[2], records[3], { type: 'event_msg', payload: { type: 'task_complete' } },
+  ]);
+  assert.equal(parse(unanswered, parseCodexRecord).events[0].status, 'pending');
   records.splice(3, 0, { type: 'response_item', payload: {
     type: 'message', role: 'user', content: [{ type: 'input_text', text: 'new request' }],
     internal_chat_message_metadata_passthrough: { turn_id: 'continuation' },
@@ -235,6 +240,91 @@ test('Codex parser rejects an unknown prompt-less turn', () => {
     ], parseCodexRecord),
     err => err.code === 'codex_missing_user_message',
   );
+});
+
+function codexDelegation(turnId, input) {
+  return { type: 'response_item', payload: {
+    type: 'function_call_output', name: 'send_message_to_thread', namespace: 'codex_app',
+    output: `<codex_delegation>\n  <source_thread_id>source</source_thread_id>\n  <input>${input}</input>\n</codex_delegation>`,
+    internal_chat_message_metadata_passthrough: { turn_id: turnId },
+  } };
+}
+
+test('Codex cross-thread delegation input becomes the prompt of a prompt-less turn', () => {
+  const start = { type: 'event_msg', timestamp: '2026-10-07T02:58:40Z', payload: { type: 'task_started', turn_id: 'delegated' } };
+  const work = { type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec' } };
+  const finish = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'done' } };
+  const { events } = parse([
+    start,
+    { type: 'turn_context', payload: { turn_id: 'delegated' } },
+    codexDelegation('delegated', ' run &lt;headless&gt; QA &amp; report '),
+    work,
+    codexDelegation('delegated', 'later steering'),
+    finish,
+  ], parseCodexRecord);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].turnId, 'delegated');
+  assert.equal(events[0].prompt, 'run <headless> QA & report');
+  assert.equal(events[0].assistantResponse, 'done');
+
+  const human = { type: 'event_msg', payload: { type: 'user_message', message: 'human request' } };
+  assert.equal(parse([start, human, codexDelegation('delegated', 'ignored'), finish], parseCodexRecord).events[0].prompt,
+    'human request');
+  assert.throws(() => parse([start, codexDelegation('other-turn', 'unlinked'), work, finish], parseCodexRecord),
+    err => err.code === 'codex_missing_user_message');
+  const malformed = codexDelegation('delegated', 'x');
+  malformed.payload.output = '<codex_delegation><source_thread_id>s</source_thread_id></codex_delegation>';
+  assert.throws(() => parse([start, malformed, finish], parseCodexRecord),
+    err => err.code === 'codex_invalid_delegation');
+  const unlinkedMalformed = { ...malformed, payload: { ...malformed.payload,
+    internal_chat_message_metadata_passthrough: { turn_id: 'other-turn' } } };
+  assert.equal(parse([start, unlinkedMalformed, human, finish], parseCodexRecord).events[0].prompt, 'human request');
+  const twoInputs = codexDelegation('delegated', 'first</input><input>second');
+  assert.equal(parse([start, twoInputs, finish], parseCodexRecord).events[0].prompt, 'first');
+  const subagent = { type: 'session_meta', payload: { id: 'child', thread_source: 'subagent' } };
+  assert.deepEqual(parse([subagent, start, codexDelegation('delegated', 'internal'), work, finish], parseCodexRecord).events, []);
+  const otherTool = codexDelegation('delegated', 'not a delegation');
+  otherTool.payload.name = 'automation_update';
+  assert.throws(() => parse([start, otherTool, work, finish], parseCodexRecord),
+    err => err.code === 'codex_missing_user_message');
+});
+
+test('Codex prompt-less retries after an errored turn continue the original human turn', () => {
+  const overloaded = { message: 'Selected model is at capacity.', codex_error_info: 'server_overloaded' };
+  const started = (id, ts) => ({ type: 'event_msg', timestamp: ts, payload: { type: 'task_started', turn_id: id } });
+  const failed = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: null, error: overloaded } };
+  const activity = { type: 'event_msg', payload: { type: 'token_count' } };
+  const human = [
+    started('original', '2026-10-05T04:48:07Z'),
+    { type: 'event_msg', payload: { type: 'user_message', message: 'human request' } },
+    { type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: 'partial' } },
+    failed,
+  ];
+  const retry = [{ type: 'event_msg', payload: { type: 'thread_settings_applied' } }, started('retry', '2026-10-05T05:01:50Z'),
+    activity];
+  const internalRetry = [started('internal-retry'), { type: 'inter_agent_communication_metadata', payload: {} }, failed];
+
+  const empty = parse([...human, ...retry, failed], parseCodexRecord).events;
+  assert.equal(empty.length, 2);
+  assert.deepEqual(empty.map(event => [event.turnId, event.prompt, event.tsUtc]),
+    [['original', 'human request', '2026-10-05T04:48:07Z'], ['original', 'human request', '2026-10-05T04:48:07Z']]);
+
+  const chained = parse([...human, ...internalRetry, ...retry,
+    { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'recovered answer' } }], parseCodexRecord);
+  assert.equal(chained.events.at(-1).turnId, 'original');
+  assert.equal(chained.events.at(-1).assistantResponse, 'recovered answer');
+  assert.equal(chained.state.retryTurn, undefined);
+
+  const succeeded = human.slice(0, -1).concat([{ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'ok' } }]);
+  assert.throws(() => parse([...succeeded, ...retry, failed], parseCodexRecord),
+    err => err.code === 'codex_missing_user_message');
+  assert.throws(() => parse([...retry, failed], parseCodexRecord), err => err.code === 'codex_missing_user_message');
+  const silentRetry = parse([...human, ...retry, failed], parseCodexRecord).events.at(-1);
+  assert.equal(silentRetry.status, 'complete');
+  assert.equal(silentRetry.assistantResponse, 'partial');
+  const humanFollowUp = { type: 'event_msg', payload: { type: 'user_message', message: 'new request' } };
+  const followed = parse([...human, humanFollowUp], parseCodexRecord);
+  assert.equal(followed.state.retryTurn, undefined);
 });
 
 test('Codex parser recovers metadata-linked response users and preserves legacy prompts', () => {

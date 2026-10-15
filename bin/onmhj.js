@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const net = require('net');
 const childProcess = require('child_process');
+const zlib = require('zlib');
 const {
   SessionParserError,
   normalizeOpenAIExchange,
@@ -27,7 +28,7 @@ const DEFAULT_REPORT_AGENT_MODELS = {
   claude: 'sonnet',
   codex: 'gpt-5.6-terra',
 };
-const SESSION_PARSER_VERSION = 10;
+const SESSION_PARSER_VERSION = 11;
 const PRIVATE_REFERENCE_HOSTS = new net.BlockList();
 for (const [network, prefix, type] of [
   ['0.0.0.0', 8, 'ipv4'],
@@ -630,7 +631,7 @@ function recoverSessionReplayUnlocked(cfg) {
   return true;
 }
 
-function replayReplacementPlan(cfg, provider, sessionIds, events) {
+function replayReplacementPlan(cfg, provider, sessionIds, events, turnIds) {
   const owned = new Set(sessionIds);
   const dir = path.join(cfg.stateDir, 'events');
   const nextByFile = new Map();
@@ -646,7 +647,8 @@ function replayReplacementPlan(cfg, provider, sessionIds, events) {
       const replace = isTranscriptSessionEvent(event) &&
         event.deviceId === cfg.deviceId &&
         event.provider === provider &&
-        owned.has(event.sessionId);
+        owned.has(event.sessionId) &&
+        (!turnIds || turnIds.has(event.turnId));
       if (replace) removed += 1;
       return !replace;
     });
@@ -718,9 +720,9 @@ function applyReplayReplacement(cfg, plan) {
   }
 }
 
-function replaceLocalSessionEvents(cfg, provider, sessionIds, events) {
+function replaceLocalSessionEvents(cfg, provider, sessionIds, events, turnIds) {
   return withEventSpoolLock(cfg, () => (
-    applyReplayReplacement(cfg, replayReplacementPlan(cfg, provider, sessionIds, events))
+    applyReplayReplacement(cfg, replayReplacementPlan(cfg, provider, sessionIds, events, turnIds))
   ));
 }
 
@@ -790,9 +792,14 @@ function normalizedSessionEvent(cfg, turn) {
 }
 
 async function readJsonLines(file, start, onLine) {
-  const stream = fs.createReadStream(file, { start });
+  // Offsets count decompressed bytes; a .zst stream cannot seek, so earlier lines are skipped.
+  const compressed = file.endsWith('.zst');
+  const decompress = compressed ? zlib.createZstdDecompress() : undefined;
+  const raw = fs.createReadStream(file, compressed ? {} : { start });
+  const stream = compressed ? raw.pipe(decompress) : raw;
+  if (compressed) raw.on('error', err => stream.destroy(err));
   let pending = Buffer.alloc(0);
-  let offset = start;
+  let offset = compressed ? 0 : start;
   for await (const chunk of stream) {
     pending = Buffer.concat([pending, chunk]);
     let newline;
@@ -802,6 +809,7 @@ async function readJsonLines(file, start, onLine) {
       const lineStart = offset;
       offset += newline + 1;
       pending = pending.subarray(newline + 1);
+      if (lineStart < start) continue;
       if (!await onLine(line.toString('utf8'), lineStart, offset)) return lineStart;
     }
   }
@@ -816,17 +824,25 @@ function parserFor(provider) {
 
 async function ingestSessionFile(cfg, source, cursors) {
   const file = canonicalSessionPath(source.path);
-  const aliases = Object.keys(cursors.files).filter(key => key !== file && canonicalSessionPath(key) === file);
+  const aliases = source.predecessor
+    ? [source.predecessor]
+    : Object.keys(cursors.files).filter(key => key !== file && canonicalSessionPath(key) === file);
   const stored = cursors.files[file] || cursors.files[aliases[0]] || {};
-  const restart = stored.parserVersion !== SESSION_PARSER_VERSION;
+  // A moved transcript may not be byte-identical at the old offset, so its successor always replays.
+  const restart = stored.parserVersion !== SESSION_PARSER_VERSION || (!!source.predecessor && !cursors.files[file]);
   const replay = Object.hasOwn(stored, 'parserVersion') && restart;
   let state = copyJson(restart ? {} : (stored.state || {}));
   const sessionIds = new Set(restart ? [] : (stored.sessionIds || []));
   const replayEvents = [];
+  // Codex threads of one session share its session id, and a spawned thread copies its parent's history
+  // cut at the fork point. A Codex replay therefore replaces only the turns this file emits again.
+  // ponytail: stale Codex turns a newer parser no longer emits are kept; add source-file provenance to events if they matter.
+  const replayTurnIds = replay && source.provider === 'codex' ? new Set() : undefined;
   let changed = 0;
   let failure;
   const parseRecord = parserFor(source.provider);
-  const offset = await readJsonLines(file, restart ? 0 : (stored.offset || 0), async (line, lineStart) => {
+  const start = restart ? 0 : (stored.offset || 0);
+  const offset = await readJsonLines(file, start, async (line, lineStart) => {
     const before = copyJson(state);
     let record;
     try {
@@ -854,9 +870,24 @@ async function ingestSessionFile(cfg, source, cursors) {
       };
       return false;
     }
+  }).catch(err => {
+    // An unreadable compressed file is quarantined like a parse failure instead of aborting the run.
+    if (!file.endsWith('.zst')) throw err;
+    failure = {
+      provider: source.provider,
+      pathHash: crypto.createHash('sha256').update(file).digest('hex'),
+      offset: start,
+      affectedDate: affectedDate(cfg, state, file),
+      parserVersion: SESSION_PARSER_VERSION,
+      schemaSignature: 'unreadable',
+      code: 'session_read_error',
+    };
+    return start;
   });
 
-  const pendingTurn = state.turn?.prompt ? state.turn : state.turn?.continuation;
+  if (source.predecessor && failure) return recordSuccessorFailure(cfg, source, failure);
+  // A retry's original turn was already emitted; re-emitting it as pending would downgrade it.
+  const pendingTurn = state.turn?.prompt ? state.turn : (state.turn?.continuation?.emitted ? undefined : state.turn?.continuation);
   if (pendingTurn) {
     const pending = { ...pendingTurn, provider: source.provider, status: 'pending' };
     if (pending.sessionId) sessionIds.add(pending.sessionId);
@@ -867,7 +898,10 @@ async function ingestSessionFile(cfg, source, cursors) {
   if (replay && failure) {
     cursors.files[file] = stored;
   } else {
-    if (replay) changed += replaceLocalSessionEvents(cfg, source.provider, sessionIds, replayEvents);
+    if (replay) {
+      for (const event of replayEvents) replayTurnIds?.add(event.turnId);
+      changed += replaceLocalSessionEvents(cfg, source.provider, sessionIds, replayEvents, replayTurnIds);
+    }
     cursors.files[file] = {
       provider: source.provider,
       offset,
@@ -900,18 +934,74 @@ async function ingestSessionFile(cfg, source, cursors) {
       const oldQuarantine = quarantineFile(cfg, alias);
       if (fs.existsSync(oldQuarantine)) fs.unlinkSync(oldQuarantine);
     }
+    if (source.predecessor) {
+      writeInternalLog(cfg, 'session_successor_attempted', { ...source.attempt, recovered: true, changed });
+    }
   }
   return { changed, failures: failure ? 1 : 0 };
 }
 
-async function ingestSessionFilesUnlocked(cfg, sources) {
+// The predecessor keeps its cursor and quarantine; the attempt is recorded so the same file is not re-read.
+function recordSuccessorFailure(cfg, source, failure) {
+  const target = quarantineFile(cfg, source.predecessor);
+  const previous = readJson(target, {});
+  writeJson(target, {
+    ...failure,
+    pathHash: previous.pathHash,
+    affectedDate: previous.affectedDate || failure.affectedDate,
+    successorAttempt: source.attempt.stat,
+  });
+  writeInternalLog(cfg, 'session_successor_attempted', { ...source.attempt, recovered: false, code: failure.code });
+  return { changed: 0, failures: 1 };
+}
+
+function sessionSuccessor(file) {
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  const archived = path.join(codexHome, 'archived_sessions', path.basename(file));
+  return [file + '.zst', archived, archived + '.zst'].find(candidate => fs.existsSync(candidate));
+}
+
+// Codex compresses old rollouts to `.jsonl.zst` or moves them to archived_sessions; a quarantine on the
+// old path would otherwise block forever because the old path is never read again.
+function movedQuarantineSources(cfg, cursors) {
+  const dir = path.join(sessionIngestDir(cfg), 'quarantine');
+  if (!fs.existsSync(dir)) return [];
+  const byHash = new Map(Object.keys(cursors).map(file => [crypto.createHash('sha256').update(file).digest('hex'), file]));
+  const sources = [];
+  for (const name of fs.readdirSync(dir).filter(item => item.endsWith('.json'))) {
+    const entry = readJson(path.join(dir, name), {});
+    const predecessor = byHash.get(entry.pathHash);
+    if (!predecessor || cursors[predecessor].provider !== 'codex' || fs.existsSync(predecessor)) continue;
+    const successor = sessionSuccessor(predecessor);
+    if (!successor) continue;
+    if (successor.endsWith('.zst') && typeof zlib.createZstdDecompress !== 'function') continue;
+    const { size, mtimeMs } = fs.statSync(successor);
+    const stat = { parserVersion: SESSION_PARSER_VERSION, size, mtimeMs };
+    if (JSON.stringify(entry.successorAttempt) === JSON.stringify(stat)) continue;
+    sources.push({
+      provider: 'codex',
+      path: canonicalSessionPath(successor),
+      predecessor,
+      attempt: { pathHash: entry.pathHash, affectedDate: entry.affectedDate, stat },
+    });
+  }
+  return sources;
+}
+
+function quarantineCount(cfg) {
+  const dir = path.join(sessionIngestDir(cfg), 'quarantine');
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter(name => name.endsWith('.json')).length : 0;
+}
+
+async function ingestSessionFilesUnlocked(cfg, sources, opts = {}) {
   const started = Date.now();
   withEventSpoolLock(cfg, () => {});
   const cursors = readJson(cursorFile(cfg), { version: 1, files: {} });
   cursors.version = SESSION_PARSER_VERSION;
   let changed = 0;
   let failures = 0;
-  const unique = [...new Map(sources.map(source => [canonicalSessionPath(source.path), source])).values()];
+  const all = opts.moved ? [...sources, ...movedQuarantineSources(cfg, cursors.files)] : sources;
+  const unique = [...new Map(all.map(source => [canonicalSessionPath(source.path), source])).values()];
   for (const source of unique) {
     const result = await ingestSessionFile(cfg, source, cursors);
     changed += result.changed;
@@ -925,14 +1015,14 @@ async function ingestSessionFilesUnlocked(cfg, sources) {
     failures,
     durationMs: Date.now() - started,
   });
-  return { changed, failures };
+  return opts.moved ? { changed, failures, remaining: quarantineCount(cfg) } : { changed, failures };
 }
 
-async function ingestSessionFiles(cfg, sources) {
+async function ingestSessionFiles(cfg, sources, opts = {}) {
   const lock = sessionIngestLockFile(cfg);
   if (!acquireLock(lock)) throw new Error('session ingestion already running');
   try {
-    return await ingestSessionFilesUnlocked(cfg, sources);
+    return await ingestSessionFilesUnlocked(cfg, sources, opts);
   } finally {
     releaseLock(lock);
   }
@@ -1005,7 +1095,9 @@ async function ingestKnownSessions(cfg, discover = false) {
   })).values()]
     .filter(source => fs.existsSync(source.path));
   writeJson(sessionSourcesFile(cfg), unique);
-  return ingestSessionFiles(cfg, unique);
+  const result = await ingestSessionFiles(cfg, unique, { moved: true });
+  // Report every remaining quarantine, not only this run's parse failures: each one still blocks.
+  return { changed: result.changed, failures: result.remaining };
 }
 
 async function sessions(opts = {}) {
