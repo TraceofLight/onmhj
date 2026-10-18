@@ -34,6 +34,40 @@ function initRepo(repo) {
   git(repo, ['config', 'user.email', 'test@example.com']);
 }
 
+test('parser upgrade replays compressed user items and clears version-12 quarantine', async () => {
+  const stateDir = tempDir();
+  const source = path.join(stateDir, 'transcript.jsonl.zst');
+  const records = [
+    { type: 'session_meta', payload: { id: 'item-session', cli_version: '0.148.0-alpha.9', cwd: 'D:\\work\\repo' } },
+    { type: 'event_msg', timestamp: '2026-07-13T01:00:00Z', payload: { type: 'task_started', turn_id: 'item-turn' } },
+    { type: 'event_msg', payload: { type: 'item_completed', turn_id: 'item-turn', item: {
+      type: 'UserMessage', content: [{ type: 'text', text: 'recovered request' }, { type: 'local_image', path: 'private.png' }],
+    } } },
+    { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } },
+  ];
+  const prefix = records.slice(0, -1).map(JSON.stringify).join('\n') + '\n';
+  fs.writeFileSync(source, zlib.zstdCompressSync(Buffer.from(prefix + JSON.stringify(records.at(-1)) + '\n')));
+  const ingestDir = path.join(stateDir, 'session-ingest');
+  const quarantine = path.join(ingestDir, 'quarantine');
+  fs.mkdirSync(quarantine, { recursive: true });
+  const failure = path.join(quarantine, crypto.createHash('sha256').update(source).digest('hex').slice(0, 16) + '.json');
+  fs.writeFileSync(failure, JSON.stringify({ affectedDate: '2026-07-13', code: 'codex_missing_user_message', parserVersion: 12 }));
+  fs.writeFileSync(path.join(ingestDir, 'cursors.json'), JSON.stringify({ files: {
+    [source]: { parserVersion: 12, offset: Buffer.byteLength(prefix), state: {
+      sessionId: 'item-session', cwd: 'D:\\work\\repo', turn: {
+        sessionId: 'item-session', turnId: 'item-turn', tsUtc: '2026-07-13T01:00:00Z', cwd: 'D:\\work\\repo',
+        prompt: '', sawIntermediate: true,
+      },
+    } },
+  } }));
+  const result = await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: source }]);
+  assert.equal(result.failures, 0);
+  assert.equal(readEvents(stateDir)[0].prompt, 'recovered request');
+  assert.equal(fs.existsSync(failure), false);
+  const cursor = JSON.parse(fs.readFileSync(path.join(ingestDir, 'cursors.json'))).files[source];
+  assert.equal(cursor.parserVersion, 13);
+});
+
 test('Windows source aliases replay once and retire obsolete cursor and quarantine keys',
   { skip: process.platform !== 'win32' }, async () => {
     const stateDir = tempDir();
@@ -291,7 +325,7 @@ test('a parser version change restarts stale cursor state', async () => {
 
   assert.deepEqual(result, { changed: 0, failures: 0 });
   assert.equal(cursors.files[path.resolve(transcript)].offset, fs.statSync(transcript).size);
-  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 12);
+  assert.equal(cursors.files[path.resolve(transcript)].parserVersion, 13);
 });
 
 test('a successful parser replay replaces stale local turns in its session scope', async () => {
@@ -389,7 +423,7 @@ test('a successful parser replay replaces stale local turns in its session scope
   assert.ok(stagedModes.every(mode => mode === 0o600));
   assert.ok(replayLocks.length > 0);
   assert.ok(replayLocks.every(Boolean));
-  assert.equal(cursor.parserVersion, 12);
+  assert.equal(cursor.parserVersion, 13);
   assert.deepEqual(cursor.sessionIds, ['claude-replayed-session']);
 });
 
@@ -1131,7 +1165,7 @@ test('raw session publish reconciles current-device sessions without touching un
     files: {
       'claude-transcript.jsonl': {
         provider: 'claude',
-        parserVersion: 12,
+        parserVersion: 13,
         sessionIds: ['reconciled-session'],
       },
     },
@@ -1238,7 +1272,7 @@ test('ingestion drops stale cursors of vanished transcripts but keeps current, q
   const cursor = parserVersion => ({ provider: 'codex', parserVersion, offset: 1, sessionIds: ['s'], state: {} });
   fs.writeFileSync(path.join(ingestDir, 'cursors.json'), JSON.stringify({ files: {
     [gone('stale.jsonl')]: cursor(9),
-    [gone('current.jsonl')]: cursor(12),
+    [gone('current.jsonl')]: cursor(13),
     [gone('quarantined.jsonl')]: cursor(9),
   } }));
   const quarantine = crypto.createHash('sha256').update(gone('quarantined.jsonl')).digest('hex').slice(0, 16);

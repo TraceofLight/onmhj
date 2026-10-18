@@ -29,6 +29,67 @@ function parse(records, parseRecord) {
   return { events, state };
 }
 
+function codexUserItem(content, turnId = 'item-turn') {
+  return { type: 'event_msg', payload: {
+    type: 'item_completed', turn_id: turnId, item: { type: 'UserMessage', content },
+  } };
+}
+
+test('Codex completed user items recover text and image-only requests', () => {
+  const start = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'item-turn' } };
+  const finish = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } };
+  for (const [content, prompt] of [
+    [[{ type: 'text', text: 'inspect these images' }, { type: 'local_image', path: 'private.png' }], 'inspect these images'],
+    [[{ type: 'image', image_url: 'https://example.com/image.png' }], '[image]'],
+    [[{ type: 'local_image', path: 'private.png' }], '[image]'],
+  ]) {
+    const { events } = parse([start, codexUserItem(content), finish], parseCodexRecord);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].turnId, 'item-turn');
+    assert.equal(events[0].prompt, prompt);
+    assert.equal(events[0].assistantResponse, 'answer');
+  }
+  const continuation = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'continuation' } };
+  const { events } = parse([start, codexUserItem([{ type: 'text', text: 'continued request' }]), continuation, finish], parseCodexRecord);
+  assert.equal(events[0].turnId, 'item-turn');
+  assert.equal(events[0].prompt, 'continued request');
+});
+
+test('Codex canonical prompts take precedence over completed user items in either order', () => {
+  const start = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'item-turn' } };
+  const item = codexUserItem([{ type: 'text', text: 'fallback' }]);
+  const human = { type: 'event_msg', payload: { type: 'user_message', message: 'canonical' } };
+  const linked = { type: 'response_item', payload: {
+    type: 'message', role: 'user', content: [{ type: 'input_text', text: 'linked' }],
+    internal_chat_message_metadata_passthrough: { turn_id: 'item-turn' },
+  } };
+  const finish = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } };
+  for (const [records, prompt] of [
+    [[item, human], 'canonical'], [[human, item], 'canonical'],
+    [[item, linked], 'linked'], [[linked, item], 'linked'],
+    [[item, human, linked], 'canonical'],
+  ]) {
+    assert.equal(parse([start, ...records, finish], parseCodexRecord).events[0].prompt, prompt);
+  }
+});
+
+test('Codex completed user items require a matching active turn', () => {
+  const item = codexUserItem([{ type: 'text', text: 'other request' }], 'other');
+  assert.deepEqual(parse([item], parseCodexRecord).events, []);
+  assert.throws(() => parse([
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: 'item-turn' } }, item,
+    { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'answer' } },
+  ], parseCodexRecord), /codex_missing_user_message/);
+});
+
+test('Codex completed user items reject malformed content without exposing it', () => {
+  const start = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'item-turn' } };
+  for (const content of ['secret', [{ type: 'text', text: 42 }], [null], [{ type: 'unknown', text: 'secret' }]]) {
+    assert.throws(() => parse([start, codexUserItem(content)], parseCodexRecord),
+      err => err.code === 'codex_invalid_user_message' && !err.message.includes('secret'));
+  }
+});
+
 test('Codex continuation completes the unfinished human turn with its original identity', () => {
   const records = [
     { type: 'event_msg', timestamp: '2026-09-03T12:54:00Z', payload: { type: 'task_started', turn_id: 'original' } },

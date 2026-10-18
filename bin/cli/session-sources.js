@@ -5,7 +5,7 @@ const { sessionSourcesFile } = require('./paths');
 const { zstdAvailable } = require('./session-files');
 const { readJson, writeJson } = require('./util');
 
-const SESSION_PARSER_VERSION = 12;
+const SESSION_PARSER_VERSION = 13;
 
 function sessionSuccessor(file) {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');

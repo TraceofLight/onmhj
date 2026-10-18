@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.20 - 2026-11-28
+
+- Recovered human prompts stored only in Codex `item_completed.UserMessage` records, including image-only requests, while keeping canonical user messages authoritative.
+- Bumped the session parser to version 13 so upgrading replays older cursors and clears successfully recovered quarantine entries, including compressed rollouts.
 
 ## 0.1.19 - 2026-11-25
 

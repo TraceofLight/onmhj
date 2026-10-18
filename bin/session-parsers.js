@@ -90,9 +90,9 @@ function parseCodexRecord(record, previous = {}) {
         parserError('codex_invalid_user_message');
       }
       const prompt = codexUserPrompt(payload.content, linked ? CODEX_INTERNAL_CONTEXT_PREFIXES : CODEX_LEGACY_IGNORED_PREFIXES);
-      // A metadata-linked prompt stays authoritative over one taken from a legacy item.
-      if (prompt && (!state.turn.prompt || (linked && state.turn.legacyPrompt))) {
-        state.turn = { ...state.turn, prompt, legacyPrompt: !linked };
+      // A metadata-linked prompt stays authoritative over fallback user items.
+      if (prompt && (!state.turn.prompt || (linked && state.turn.fallbackPrompt))) {
+        state.turn = { ...state.turn, prompt, fallbackPrompt: !linked };
       }
     }
     if (payload.role === 'developer' && Array.isArray(payload.content) && payload.content.some(
@@ -118,6 +118,19 @@ function parseCodexRecord(record, previous = {}) {
   if (state.turn && !taskBoundary) state.turn = { ...state.turn, sawIntermediate: true };
 
   if (record.type !== 'event_msg') return { state, events: [] };
+  if (payload.type === 'item_completed' && payload.item?.type === 'UserMessage' &&
+      state.turn && payload.turn_id === state.turn.turnId && !state.turn.prompt) {
+    const content = payload.item.content;
+    if (!Array.isArray(content) || !content.every(block => block &&
+        ((block.type === 'text' && typeof block.text === 'string') ||
+          block.type === 'image' || block.type === 'local_image'))) {
+      parserError('codex_invalid_user_message');
+    }
+    const prompt = content.filter(block => block.type === 'text').map(block => block.text).join('\n') ||
+      (content.some(block => ['image', 'local_image'].includes(block.type)) ? '[image]' : '');
+    if (prompt) state.turn = { ...state.turn, prompt, fallbackPrompt: true };
+    return { state, events: [] };
+  }
   if (payload.type === 'task_started') {
     if (typeof payload.turn_id !== 'string') parserError('codex_invalid_task_started');
     const continuation = (state.turn?.prompt ? state.turn : state.turn?.continuation) || state.retryTurn;
@@ -145,6 +158,7 @@ function parseCodexRecord(record, previous = {}) {
       assistantResponse: '',
     };
     state.turn.prompt = payload.message;
+    delete state.turn.fallbackPrompt;
     return { state, events: [] };
   }
 
