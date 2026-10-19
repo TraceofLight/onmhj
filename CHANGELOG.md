@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Dropped stale cursors of vanished transcripts. Cursors at the current parser version and quarantined ones are kept, because publish scopes and moved-quarantine recovery still read them.
 - Read human prompts from legacy Codex rollouts (CLI before 0.142.3) that store them only as metadata-less user messages.
 - Discovered compressed `.jsonl.zst` and `archived_sessions` Codex rollouts, followed known rollouts when Codex moves them, and skipped unchanged compressed files.
 - Kept completed turns when a truncated copy of the same turn arrives as pending.

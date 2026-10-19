@@ -1032,6 +1032,12 @@ async function ingestSessionFilesUnlocked(cfg, sources, opts = {}) {
     changed += result.changed;
     failures += result.failures;
   }
+  // A vanished transcript's stale cursor is never read again. Current-version cursors stay: publish
+  // scopes read them. Quarantined ones stay: movedQuarantineSources maps them to their successor.
+  for (const [file, cursor] of Object.entries(cursors.files)) {
+    if (cursor.parserVersion !== SESSION_PARSER_VERSION && !fs.existsSync(file) &&
+        !fs.existsSync(quarantineFile(cfg, file))) delete cursors.files[file];
+  }
   writeJson(cursorFile(cfg), cursors);
   writeInternalLog(cfg, 'session_ingest_completed', {
     parserVersion: SESSION_PARSER_VERSION,

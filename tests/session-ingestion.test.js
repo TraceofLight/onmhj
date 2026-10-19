@@ -1226,3 +1226,27 @@ test('manual import never truncates supplied work evidence', () => {
   assert.equal(events[0].prompt, text);
   assert.equal(events[1].promptPreview, legacyPreview);
 });
+
+test('ingestion drops stale cursors of vanished transcripts but keeps current, quarantined, and live ones', async () => {
+  const stateDir = tempDir();
+  const transcript = path.join(stateDir, 'codex.jsonl');
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'codex-transcript.jsonl'), transcript);
+  const gone = name => path.join(stateDir, 'gone', name);
+  const ingestDir = path.join(stateDir, 'session-ingest');
+  fs.mkdirSync(path.join(ingestDir, 'quarantine'), { recursive: true });
+  const cursor = parserVersion => ({ provider: 'codex', parserVersion, offset: 1, sessionIds: ['s'], state: {} });
+  fs.writeFileSync(path.join(ingestDir, 'cursors.json'), JSON.stringify({ files: {
+    [gone('stale.jsonl')]: cursor(9),
+    [gone('current.jsonl')]: cursor(12),
+    [gone('quarantined.jsonl')]: cursor(9),
+  } }));
+  const quarantine = crypto.createHash('sha256').update(gone('quarantined.jsonl')).digest('hex').slice(0, 16);
+  fs.writeFileSync(path.join(ingestDir, 'quarantine', quarantine + '.json'), JSON.stringify({ affectedDate: '2026-07-13' }));
+
+  await onmhj.ingestSessionFiles(cfg(stateDir), [{ provider: 'codex', path: transcript }]);
+
+  const files = JSON.parse(fs.readFileSync(path.join(ingestDir, 'cursors.json'), 'utf8')).files;
+  assert.deepEqual(Object.keys(files).sort(),
+    [gone('current.jsonl'), gone('quarantined.jsonl'), path.resolve(transcript)].sort());
+  assert.equal(readEvents(stateDir).length, 1);
+});
