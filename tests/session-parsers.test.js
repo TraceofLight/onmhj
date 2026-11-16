@@ -7,7 +7,9 @@ const {
   normalizeOpenAIExchange,
   parseClaudeRecord,
   parseCodexRecord,
+  parseDshRecord,
 } = require('../bin/session-parsers');
+const dsh = require('./dsh-records');
 
 function fixture(name) {
   return fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8')
@@ -538,6 +540,85 @@ test('relevant malformed shapes fail without content in the error', () => {
     () => parseClaudeRecord({ type: 'assistant', message: { content: secret } }, { turn: { prompt: 'x' } }),
     err => err.code === 'claude_invalid_assistant_message' && !err.message.includes(secret),
   );
+});
+
+test('DSH parser emits the human prompt with the final answer of each turn', () => {
+  const { events, state } = parse([
+    dsh.session('session-a'),
+    ...dsh.humanTurn(1, 10, 'msg-1', 'first task', 'first answer'),
+    ...dsh.humanTurn(2, 100, 'msg-2', 'second task', 'second answer'),
+  ], parseDshRecord);
+  assert.deepEqual(events, [
+    { provider: 'dsh', sessionId: 'session-a', turnId: 'msg-1', tsUtc: '2026-07-13T01:00:10.000Z', cwd: '/work/repo',
+      prompt: 'first task', status: 'complete', assistantResponse: 'first answer' },
+    { provider: 'dsh', sessionId: 'session-a', turnId: 'msg-2', tsUtc: '2026-07-13T01:01:40.000Z', cwd: '/work/repo',
+      prompt: 'second task', status: 'complete', assistantResponse: 'second answer' },
+  ]);
+  assert.equal(state.turn, undefined);
+  assert.equal(JSON.stringify(events).includes('private reasoning'), false);
+});
+
+test('DSH parser joins steering prompts and keeps an unfinished turn pending', () => {
+  const { events, state } = parse([
+    dsh.session('session-a'),
+    { type: 'turn/start', time: dsh.at(10), data: { turn: 1 } },
+    dsh.userMessage(10, 'msg-1', 'start task'),
+    dsh.userMessage(20, 'msg-2', 'also check tests'),
+    dsh.assistantMessage(25, [{ type: 'text', text: 'partial' }]),
+  ], parseDshRecord);
+  assert.deepEqual(events, []);
+  assert.equal(state.turn.turnId, 'msg-1');
+  assert.equal(state.turn.prompt, 'start task\n\nalso check tests');
+});
+
+test('DSH prompt-less turns extend the last human turn and are otherwise dropped', () => {
+  const { events } = parse([
+    dsh.session('session-a'),
+    ...dsh.turn(1, 0, [dsh.userMessage(1, 'internal', 'scheduled reminder', 'goal'),
+      dsh.assistantMessage(2, [{ type: 'text', text: 'orphan' }])]),
+    ...dsh.humanTurn(2, 10, 'msg-1', 'delegate work', 'waiting for subagents'),
+    ...dsh.turn(3, 60, [dsh.userMessage(60, 'settled', 'subagent result', 'subagent-settled'),
+      dsh.assistantMessage(61, [{ type: 'text', text: 'final summary' }])]),
+  ], parseDshRecord);
+  assert.deepEqual(events.map(event => [event.turnId, event.assistantResponse]), [
+    ['msg-1', 'waiting for subagents'],
+    ['msg-1', 'waiting for subagents\n\nfinal summary'],
+  ]);
+});
+
+test('DSH parser skips subagent sessions and records copied into a fork', () => {
+  const subagent = parse([
+    dsh.session('child', { delegationDepth: 1 }),
+    ...dsh.humanTurn(1, 10, 'msg-1', 'delegated task', 'child answer'),
+  ], parseDshRecord);
+  assert.deepEqual(subagent.events, []);
+
+  const fork = parse([
+    dsh.session('fork', { isSeeded: true, createdAt: dsh.at(50) }),
+    ...dsh.humanTurn(1, 10, 'parent-msg', 'parent task', 'parent answer'),
+    { type: 'session/end-seed', time: dsh.at(50), data: {} },
+    ...dsh.humanTurn(2, 60, 'fork-msg', 'fork task', 'fork answer'),
+  ], parseDshRecord);
+  assert.deepEqual(fork.events.map(event => event.turnId), ['fork-msg']);
+});
+
+test('DSH parser rejects unknown session versions and malformed messages without content', () => {
+  const secret = 'private prompt body';
+  assert.throws(() => parseDshRecord(dsh.session('a', { version: 5 }), {}), err => err.code === 'dsh_unsupported_version');
+  const state = parse([dsh.session('a'), { type: 'turn/start', time: dsh.at(0), data: { turn: 1 } }], parseDshRecord).state;
+  assert.throws(
+    () => parseDshRecord({ type: 'user/message', time: dsh.at(1), data: { content: secret, source: { kind: 'user' }, id: 'x' } }, state),
+    err => err.code === 'dsh_invalid_user_message' && !err.message.includes(secret),
+  );
+  assert.throws(
+    () => parseDshRecord({ type: 'user/message', time: dsh.at(1), data: { content: [{ type: 'text', text: secret }], source: { kind: 'user' } } }, state),
+    err => err.code === 'dsh_missing_user_message_id',
+  );
+  assert.throws(
+    () => parseDshRecord({ type: 'assistant/message', time: dsh.at(1), data: { message: { content: secret } } }, state),
+    err => err.code === 'dsh_invalid_assistant_message' && !err.message.includes(secret),
+  );
+  assert.throws(() => parseDshRecord({ type: 'turn/start', data: {} }, state), err => err.code === 'dsh_invalid_timestamp');
 });
 
 test('OpenAI-compatible parser accepts provider reasoning aliases without retaining them', () => {

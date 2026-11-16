@@ -271,6 +271,119 @@ function parseClaudeRecord(record, previous = {}) {
   };
 }
 
+function dshText(content, code) {
+  if (!Array.isArray(content)) parserError(code);
+  return content
+    .filter(block => block && block.type === 'text')
+    .map(block => typeof block.text === 'string' ? block.text : parserError(code))
+    .join('\n');
+}
+
+function dshPrompt(content) {
+  const text = dshText(content, 'dsh_invalid_user_message');
+  return text || (content.some(block => block && block.type === 'image') ? '[image]' : '');
+}
+
+function dshTimestamp(record) {
+  if (!Number.isFinite(record.time)) parserError('dsh_invalid_timestamp');
+  return new Date(record.time).toISOString();
+}
+
+function dshTurnEvent(turn) {
+  const event = {
+    provider: 'dsh',
+    sessionId: turn.sessionId,
+    turnId: turn.turnId,
+    tsUtc: turn.tsUtc,
+    cwd: turn.cwd,
+    prompt: turn.prompt,
+    status: turn.assistantResponse ? 'complete' : 'pending',
+  };
+  if (turn.assistantResponse) event.assistantResponse = turn.assistantResponse;
+  return event;
+}
+
+function startDshTurn(state, record) {
+  // A forked session first replays its parent's records with their original, earlier times.
+  if (state.seededBefore && record.time < state.seededBefore) {
+    delete state.turn;
+    return;
+  }
+  state.turn = {
+    sessionId: state.sessionId || '',
+    turnId: '',
+    tsUtc: dshTimestamp(record),
+    cwd: state.cwd || '',
+    prompt: '',
+    assistantResponse: '',
+  };
+}
+
+function addDshPrompt(state, record) {
+  const prompt = dshPrompt(record.data.content);
+  if (!prompt) return;
+  const turn = { ...state.turn };
+  if (!turn.prompt) {
+    if (typeof record.data.id !== 'string' || !record.data.id) parserError('dsh_missing_user_message_id');
+    turn.turnId = record.data.id;
+    turn.tsUtc = dshTimestamp(record);
+  }
+  // A message sent while the agent works is spliced into the running turn.
+  turn.prompt = turn.prompt ? `${turn.prompt}\n\n${prompt}` : prompt;
+  state.turn = turn;
+}
+
+function endDshTurn(state) {
+  const turn = state.turn;
+  delete state.turn;
+  if (turn.prompt) {
+    state.last = dshTurnEvent(turn);
+    return [state.last];
+  }
+  // A prompt-less turn resumes the last human turn, for example after subagent results arrive.
+  if (!state.last || !turn.assistantResponse) return [];
+  state.last = {
+    ...state.last,
+    assistantResponse: [state.last.assistantResponse, turn.assistantResponse].filter(Boolean).join('\n\n'),
+    status: 'complete',
+  };
+  return [state.last];
+}
+
+function parseDshRecord(record, previous = {}) {
+  const state = { ...previous };
+  if (!record || typeof record !== 'object') return { state, events: [] };
+  if (record.type === 'session') {
+    if (record.version !== 4) parserError('dsh_unsupported_version');
+    state.sessionId = String(record.id || '');
+    state.cwd = String(record.cwd || '');
+    // Subagent sessions report back to their parent, whose turns already carry the outcome.
+    state.subagent = Number(record.delegationDepth) > 0;
+    state.seededBefore = record.isSeeded ? Number(record.createdAt) : 0;
+    return { state, events: [] };
+  }
+  if (state.subagent) return { state, events: [] };
+  if (record.type === 'turn/start') {
+    startDshTurn(state, record);
+    return { state, events: [] };
+  }
+  if (!state.turn) return { state, events: [] };
+  const data = record.data;
+  if (record.type === 'user/message') {
+    if (!data || !data.source) parserError('dsh_invalid_user_message');
+    if (data.source.kind === 'user') addDshPrompt(state, record);
+    return { state, events: [] };
+  }
+  if (record.type === 'assistant/message') {
+    if (!data || !data.message) parserError('dsh_invalid_assistant_message');
+    const text = dshText(data.message.content, 'dsh_invalid_assistant_message');
+    if (text) state.turn = { ...state.turn, assistantResponse: text };
+    return { state, events: [] };
+  }
+  if (record.type === 'turn/end') return { state, events: endDshTurn(state) };
+  return { state, events: [] };
+}
+
 function messageText(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -337,4 +450,5 @@ module.exports = {
   normalizeOpenAIExchange,
   parseClaudeRecord,
   parseCodexRecord,
+  parseDshRecord,
 };

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Captured DeepSeek Harness (DSH) sessions from `$DSH_HOME/sessions` as `dsh` turns, skipping subagent sessions and parent history copied into forked sessions, and extending the last human turn with answers from prompt-less continuation turns.
+- Decoded multi-frame zstd transcripts frame by frame, because Node's zstd stream stops after the first frame, and left a frame that is still being appended for the next scan.
+- Added `onmhj catchup` to scan transcripts and run due report jobs without a lifecycle hook, and `onmhj schedule install|uninstall|status` to run it hourly through launchd, a systemd user timer, or Windows Task Scheduler.
+
 ## 0.1.15 - 2026-10-19
 
 - Dropped stale cursors of vanished transcripts. Cursors at the current parser version and quarantined ones are kept, because publish scopes and moved-quarantine recovery still read them.

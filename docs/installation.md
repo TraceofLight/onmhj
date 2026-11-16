@@ -153,6 +153,27 @@ Final report prompts include a reference ID catalog. The model selects markers s
 
 The worker waits for the soonest unfinished job's retry deadline regardless of work-date order. Already-due work schedules another tick rather than signaling completion; `worker_done` means no unfinished jobs remain.
 
+## DSH
+
+DeepSeek Harness has no lifecycle hooks for `onmhj`. Its sessions are append-only multi-frame zstd files at `$DSH_HOME/sessions/<workspace>/<session>/session.v4.jsonl.zstd` (`$DSH_HOME` defaults to `~/.dsh`), and only a scan captures them. Node.js 22.15 or newer is required for zstd.
+
+Register an hourly catch-up task once, from a checkout path that will not move:
+
+```sh
+node /path/to/onmhj/bin/onmhj.js schedule install
+node /path/to/onmhj/bin/onmhj.js schedule status
+```
+
+Each run executes `onmhj catchup`: it scans Codex, Claude, and DSH transcripts, then schedules and runs due report jobs when `autoReport` is enabled and a report repo is registered. The task uses the absolute Node.js and script paths of the installing command.
+
+| OS | Registration |
+| --- | --- |
+| macOS | `~/Library/LaunchAgents/com.onmhj.catchup.plist`, loaded with `launchctl bootstrap gui/<uid>`; output goes to `<stateDir>/catchup.log`. |
+| Linux | `~/.config/systemd/user/onmhj-catchup.{service,timer}` with `OnCalendar=hourly` and `Persistent=true`; run `loginctl enable-linger $USER` to keep it running after logout. |
+| Windows | Task Scheduler task `onmhj-catchup`, hourly, using the default config path. |
+
+macOS and Linux tasks keep the installing shell's `PATH` and `ONMHJ_CONFIG`, so `git` and the report agent resolve as they do interactively. Re-run `schedule install` after moving the checkout, changing Node.js, or changing `PATH`. Under a scheduler `--report-agent=auto` falls back to Codex because no plugin runtime is active; set `--report-agent=claude` or `codex` explicitly. Remove the task with `schedule uninstall`.
+
 ## Manual Injection
 
 Inject one manual event into the local spool:
@@ -172,7 +193,7 @@ Bulk import normalized JSONL:
 node /path/to/onmhj/bin/onmhj.js import /tmp/onmhj-backfill.jsonl
 ```
 
-Scan local Codex and Claude transcripts after installation or update:
+Scan local Codex, Claude, and DSH transcripts after installation or update:
 
 ```sh
 node /path/to/onmhj/bin/onmhj.js sessions

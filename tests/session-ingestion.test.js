@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 
 const onmhj = require('../bin/onmhj');
+const dsh = require('./dsh-records');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-sessions-'));
@@ -1250,3 +1251,39 @@ test('ingestion drops stale cursors of vanished transcripts but keeps current, q
     [gone('current.jsonl'), gone('quarantined.jsonl'), path.resolve(transcript)].sort());
   assert.equal(readEvents(stateDir).length, 1);
 });
+
+test('discovery ingests multi-frame DSH sessions as they grow and skips subagent sessions',
+  { skip: typeof zlib.zstdCompressSync !== 'function' }, async () => {
+    const stateDir = tempDir();
+    await dsh.withSessionHomes(stateDir, async () => {
+      const sessions = path.join(stateDir, 'dsh', 'sessions', '--work-repo--');
+      const live = path.join(sessions, 'session-a', 'session.v4.jsonl.zstd');
+      dsh.appendFrames(live, [dsh.session('session-a'), ...dsh.humanTurn(1, 10, 'msg-1', 'first task', 'first answer')]);
+      dsh.appendFrames(path.join(sessions, 'child', 'session.v4.jsonl.zstd'),
+        [dsh.session('child', { delegationDepth: 1 }), ...dsh.humanTurn(1, 10, 'child-1', 'delegated', 'child answer')]);
+      fs.writeFileSync(path.join(sessions, 'session-a', 'notes.jsonl'), '{"not":"a session"}\n');
+
+      assert.deepEqual(await onmhj.ingestKnownSessions(cfg(stateDir), true), { changed: 1, failures: 0 });
+      assert.deepEqual(readEvents(stateDir).map(event => [event.provider, event.source, event.prompt, event.assistantResponse]),
+        [['dsh', 'dsh-transcript', 'first task', 'first answer']]);
+
+      // A frame still being written is left for the next run instead of failing the file.
+      dsh.appendFrames(live, dsh.humanTurn(2, 100, 'msg-2', 'second task', 'second answer'));
+      const partial = zlib.zstdCompressSync(Buffer.from(JSON.stringify(dsh.userMessage(200, 'msg-3', 'third')) + '\n'));
+      fs.appendFileSync(live, partial.subarray(0, partial.length - 2));
+      assert.deepEqual(await onmhj.ingestKnownSessions(cfg(stateDir), true), { changed: 1, failures: 0 });
+      assert.deepEqual(readEvents(stateDir).map(event => event.prompt), ['first task', 'second task']);
+      assert.deepEqual(await onmhj.ingestKnownSessions(cfg(stateDir), true), { changed: 0, failures: 0 });
+    });
+  });
+
+test('an unreadable DSH session is quarantined for its date',
+  { skip: typeof zlib.zstdCompressSync !== 'function' }, async () => {
+    const stateDir = tempDir();
+    await dsh.withSessionHomes(stateDir, async () => {
+      const file = path.join(stateDir, 'dsh', 'sessions', 'ws', 'broken', 'session.v4.jsonl.zstd');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'not zstd data');
+      assert.equal((await onmhj.ingestKnownSessions(cfg(stateDir), true)).failures, 1);
+    });
+  });

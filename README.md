@@ -1,6 +1,6 @@
 # 🤔 onmhj
 
-AI-session worklog capture for Codex and Claude Code.
+AI-session worklog capture for Codex, Claude Code, and DeepSeek Harness (DSH).
 
 `onmhj` records local AI coding-session events, merges them across devices, and publishes daily worklogs to a git-backed report repository. It is built for "what did I do today?" capture; `ejmhj` consumes those logs for "what did I do yesterday?" reports.
 
@@ -86,7 +86,9 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj ejmhj [date]` | Publish raw evidence and the final report for yesterday or the specified work date. |
 | `onmhj inject --text=...` | Add one normalized manual event. |
 | `onmhj import <events.jsonl>` | Import normalized events or OpenAI-compatible request/response captures. |
-| `onmhj sessions [--publish]` | Incrementally scan Codex and Claude transcripts; optionally publish all raw dates in one commit. |
+| `onmhj sessions [--publish]` | Incrementally scan Codex, Claude, and DSH transcripts; optionally publish all raw dates in one commit. |
+| `onmhj catchup` | Scan transcripts and run due report jobs without a lifecycle hook. |
+| `onmhj schedule install\|uninstall\|status` | Register `catchup` as an hourly OS task (launchd, systemd user timer, or Task Scheduler). |
 | `onmhj worker` | Process pending report jobs in the background. |
 | `onmhj selftest` | Run the isolated built-in verification without changing the active user config. |
 
@@ -115,9 +117,11 @@ An OpenAI-compatible capture record contains `provider`, `tsUtc`, `cwd`, and the
 
 ## Canonical Sessions
 
-`onmhj sessions` reads Codex and Claude transcripts incrementally. Each canonical `AISessionTurn` contains a real user request and its final answer when available; known tool results, skill injections, notifications, commands, and compaction records remain only in the original transcript. Canonical user prompts and final answers are stored completely after redaction.
+`onmhj sessions` reads Codex, Claude, and DSH transcripts incrementally. Each canonical `AISessionTurn` contains a real user request and its final answer when available; known tool results, skill injections, notifications, commands, and compaction records remain only in the original transcript. Canonical user prompts and final answers are stored completely after redaction.
 
 Public Markdown links, bare HTTP(S) URLs, and DOI values cited in a final assistant answer are normalized into the turn's `references` array. Local files, localhost, private-network addresses, local-only hostnames, credentialed URLs, and URLs with sensitive authentication query parameters are excluded. Tracking parameters and fragments are removed. New final reports group work into numbered tasks with background, process, decisions, and results; each reference appears only in the related task's `References` or `참고 자료` subsection. Tool records and browsing history are not scanned.
+
+DSH has no lifecycle hooks, so its sessions under `$DSH_HOME/sessions` (default `~/.dsh/sessions`) are captured only by a scan. Run `onmhj schedule install` once from a stable checkout to scan and schedule reports hourly; see [Installation](./docs/installation.md#dsh). DSH subagent sessions and the parent history copied into a forked session are skipped, and a prompt-less turn that resumes after subagent results extends the last human turn.
 
 Set `onmhj config --auto-report=false` to stop `SessionStart` from scheduling report jobs. `onmhj sessions --publish` then pulls the registered repo, blocks on any unresolved quarantine entry, replaces successfully replayed current-device session scopes in `raw/ai-sessions`, and creates one commit and push without changing `reports/`, report jobs, or confirmations. Other devices, sessions, and event types are preserved.
 

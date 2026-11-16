@@ -6,6 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const onmhj = require('../bin/onmhj.js');
+const dsh = require('./dsh-records');
 
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -257,4 +258,30 @@ test('does not requeue a confirmed legacy report with collected references', () 
 
   assert.equal(queued, false);
   assert.equal(onmhj.readReportJob(onmhj.config(), '2026-07-09'), null);
+});
+
+test('catchup ingests hookless DSH sessions and schedules their unreported dates', async () => {
+  const cfg = createConfig();
+  const sessionFile = path.join(path.dirname(cfg.configPath), 'dsh', 'sessions', 'ws', 'a', 'session.v4.jsonl.zstd');
+  dsh.appendFrames(sessionFile, [dsh.session('a'), ...dsh.humanTurn(1, 10, 'msg-1', 'dsh task', 'dsh answer')]);
+  onmhj.setConfigPath(cfg.configPath);
+  await dsh.withSessionHomes(path.dirname(cfg.configPath), async () => {
+    assert.deepEqual(await onmhj.catchup(), { changed: 1, failures: 0 });
+  });
+  // The registered path is not a git repo, so the scheduled job runs and records why it failed.
+  const job = onmhj.readReportJob(onmhj.config(), '2026-07-13');
+  assert.equal(job.status, 'failed');
+  assert.match(job.lastError, /not a git repo/);
+});
+
+test('catchup with autoReport=false only ingests sessions', async () => {
+  const cfg = createConfig();
+  writeJson(cfg.configPath, { ...cfg, autoReport: false });
+  const sessionFile = path.join(path.dirname(cfg.configPath), 'dsh', 'sessions', 'ws', 'a', 'session.v4.jsonl.zstd');
+  dsh.appendFrames(sessionFile, [dsh.session('a'), ...dsh.humanTurn(1, 10, 'msg-1', 'dsh task', 'dsh answer')]);
+  onmhj.setConfigPath(cfg.configPath);
+  await dsh.withSessionHomes(path.dirname(cfg.configPath), async () => {
+    assert.deepEqual(await onmhj.catchup(), { changed: 1, failures: 0 });
+  });
+  assert.equal(fs.existsSync(path.join(cfg.stateDir, 'jobs', 'reports')), false);
 });

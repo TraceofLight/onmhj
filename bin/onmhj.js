@@ -11,9 +11,11 @@ const {
   normalizeOpenAIExchange,
   parseClaudeRecord,
   parseCodexRecord,
+  parseDshRecord,
 } = require('./session-parsers');
 const { DEFAULT_TARGET_BYTES, chunkRawEvents } = require('./report-chunks');
 const { cleanupMapCache, mapRawEvidence, reduceMapSummaries } = require('./report-map-reduce');
+const { applySchedule, schedulePlan } = require('./schedule');
 
 let CONFIG_PATH = process.env.ONMHJ_CONFIG || path.join(os.homedir(), '.config', 'onmhj', 'config.json');
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.local', 'state', 'onmhj');
@@ -65,6 +67,8 @@ function usage() {
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj sessions [--publish] [--no-push]',
+    '  onmhj catchup',
+    '  onmhj schedule install|uninstall|status',
     '  onmhj flush [YYYY-MM-DD] [--no-push]',
     '  onmhj ejmhj [YYYY-MM-DD] [--no-push]',
     '  onmhj worker',
@@ -805,13 +809,50 @@ function normalizedSessionEvent(cfg, turn) {
   return event;
 }
 
+const ZSTD_MAGIC = 0xFD2FB528;
+const ZSTD_INCOMPLETE = Infinity;
+
+function isCompressedSession(file) {
+  return /\.zstd?$/.test(file);
+}
+
+// Returns where the zstd frame starting at `start` ends, or ZSTD_INCOMPLETE while a writer is still appending it.
+function zstdFrameEnd(buffer, start) {
+  if (start + 8 > buffer.length) return ZSTD_INCOMPLETE;
+  const magic = buffer.readUInt32LE(start);
+  if ((magic & 0xFFFFFFF0) >>> 0 === 0x184D2A50) return start + 8 + buffer.readUInt32LE(start + 4);
+  if (magic !== ZSTD_MAGIC) throw new Error('invalid zstd frame');
+  const descriptor = buffer[start + 4];
+  const singleSegment = (descriptor >> 5) & 1;
+  const contentSizeBytes = [singleSegment, 2, 4, 8][descriptor >> 6];
+  let offset = start + 5 + (singleSegment ? 0 : 1) + [0, 1, 2, 4][descriptor & 3] + contentSizeBytes;
+  for (;;) {
+    if (offset + 3 > buffer.length) return ZSTD_INCOMPLETE;
+    const header = buffer.readUIntLE(offset, 3);
+    const type = (header >> 1) & 3;
+    if (type === 3) throw new Error('invalid zstd block');
+    offset += 3 + (type === 1 ? 1 : header >>> 3);
+    if (header & 1) return offset + ((descriptor >> 2) & 1 ? 4 : 0);
+  }
+}
+
+// Node's zstd stream stops at the first frame, and DSH appends one frame per write, so frames are decoded one by one.
+function* zstdChunks(file) {
+  if (!zstdAvailable()) throw new Error('zstd decompression is unavailable');
+  const buffer = fs.readFileSync(file);
+  let offset = 0;
+  while (offset < buffer.length) {
+    const end = zstdFrameEnd(buffer, offset);
+    if (end > buffer.length) return;
+    if (buffer.readUInt32LE(offset) === ZSTD_MAGIC) yield zlib.zstdDecompressSync(buffer.subarray(offset, end));
+    offset = end;
+  }
+}
+
 async function readJsonLines(file, start, onLine) {
-  // Offsets count decompressed bytes; a .zst stream cannot seek, so earlier lines are skipped.
-  const compressed = file.endsWith('.zst');
-  const decompress = compressed ? zlib.createZstdDecompress() : undefined;
-  const raw = fs.createReadStream(file, compressed ? {} : { start });
-  const stream = compressed ? raw.pipe(decompress) : raw;
-  if (compressed) raw.on('error', err => stream.destroy(err));
+  // Offsets count decompressed bytes; a zstd file cannot seek, so earlier lines are skipped.
+  const compressed = isCompressedSession(file);
+  const stream = compressed ? zstdChunks(file) : fs.createReadStream(file, { start });
   let pending = Buffer.alloc(0);
   let offset = compressed ? 0 : start;
   for await (const chunk of stream) {
@@ -833,6 +874,7 @@ async function readJsonLines(file, start, onLine) {
 function parserFor(provider) {
   if (provider === 'codex') return parseCodexRecord;
   if (provider === 'claude') return parseClaudeRecord;
+  if (provider === 'dsh') return parseDshRecord;
   throw new SessionParserError('unsupported_session_provider');
 }
 
@@ -842,8 +884,8 @@ async function ingestSessionFile(cfg, source, cursors) {
     ? [source.predecessor]
     : Object.keys(cursors.files).filter(key => key !== file && canonicalSessionPath(key) === file);
   const stored = cursors.files[file] || cursors.files[aliases[0]] || {};
-  // A compressed rollout is never appended to; decompressing it again would only re-read the same bytes.
-  const stat = file.endsWith('.zst') ? (({ size, mtimeMs }) => ({ size, mtimeMs }))(fs.statSync(file)) : undefined;
+  // A compressed session is skipped until it changes; decompressing it again would only re-read the same bytes.
+  const stat = isCompressedSession(file) ? (({ size, mtimeMs }) => ({ size, mtimeMs }))(fs.statSync(file)) : undefined;
   if (stat && cursors.files[file] && stored.parserVersion === SESSION_PARSER_VERSION &&
       JSON.stringify(stored.stat) === JSON.stringify(stat) && !fs.existsSync(quarantineFile(cfg, file))) {
     return { changed: 0, failures: 0 };
@@ -892,7 +934,7 @@ async function ingestSessionFile(cfg, source, cursors) {
     }
   }).catch(err => {
     // An unreadable compressed file is quarantined like a parse failure instead of aborting the run.
-    if (!file.endsWith('.zst')) throw err;
+    if (!isCompressedSession(file)) throw err;
     failure = {
       provider: source.provider,
       pathHash: crypto.createHash('sha256').update(file).digest('hex'),
@@ -1104,11 +1146,18 @@ function findJsonlFiles(root, provider, files = []) {
     if (entry.name === 'subagents') continue;
     const target = path.join(root, entry.name);
     if (entry.isDirectory()) findJsonlFiles(target, provider, files);
-    else if (entry.isFile() && (entry.name.endsWith('.jsonl') || (entry.name.endsWith('.jsonl.zst') && zstdAvailable()))) {
+    else if (entry.isFile() && (entry.name.endsWith('.jsonl') || (/\.jsonl\.zstd?$/.test(entry.name) && zstdAvailable()))) {
       files.push({ provider, path: target });
     }
   }
   return files;
+}
+
+// DSH keeps one append-only `session.v<N>.jsonl.zstd` per session under `$DSH_HOME/sessions`.
+function findDshSessionFiles() {
+  const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+  return findJsonlFiles(path.join(dshHome, 'sessions'), 'dsh')
+    .filter(source => /^session\.v\d+\.jsonl\.zstd$/.test(path.basename(source.path)));
 }
 
 function discoverSessionSources() {
@@ -1117,6 +1166,7 @@ function discoverSessionSources() {
     ...findJsonlFiles(path.join(codexHome, 'sessions'), 'codex'),
     ...findJsonlFiles(path.join(codexHome, 'archived_sessions'), 'codex'),
     ...findJsonlFiles(path.join(os.homedir(), '.claude', 'projects'), 'claude'),
+    ...findDshSessionFiles(),
   ];
 }
 
@@ -1143,6 +1193,34 @@ async function sessions(opts = {}) {
   process.stdout.write(`sessions changed=${result.changed} failures=${result.failures}\n`);
   if (opts.publish) publishSessionEvents(cfg, opts);
   return result;
+}
+
+// Runtimes without lifecycle hooks, such as DSH, rely on `onmhj schedule install` running this periodically.
+async function catchup(opts = {}) {
+  const cfg = config();
+  const result = await ingestKnownSessions(cfg, true);
+  writeInternalLog(cfg, 'catchup', { changed: result.changed, failures: result.failures });
+  process.stdout.write(`catchup changed=${result.changed} failures=${result.failures}\n`);
+  if (cfg.autoReport && cfg.repoPath) await processReportJobs(cfg, opts);
+  return result;
+}
+
+function scheduleContext(cfg) {
+  return {
+    home: os.homedir(),
+    uid: typeof process.getuid === 'function' ? process.getuid() : 0,
+    command: [process.execPath, __filename, 'catchup'],
+    // Scheduled tasks start with a minimal environment; keep the PATH that finds git and the report agent.
+    env: { PATH: process.env.PATH || '', ONMHJ_CONFIG: CONFIG_PATH },
+    logFile: path.join(cfg.stateDir, 'catchup.log'),
+  };
+}
+
+function schedule(action) {
+  const cfg = config();
+  const status = applySchedule(action, schedulePlan(process.platform, scheduleContext(cfg)));
+  if (action !== 'status') writeInternalLog(cfg, 'schedule', { action, platform: process.platform });
+  process.exitCode = status;
 }
 
 function normalizeImportedEvent(raw, cfg) {
@@ -2624,6 +2702,8 @@ async function main() {
   if (cmd === 'inject') return inject(opts);
   if (cmd === 'import') return importEvents(first);
   if (cmd === 'sessions') return sessions(opts);
+  if (cmd === 'catchup') return catchup();
+  if (cmd === 'schedule') return schedule(first);
   if (cmd === 'flush') return flush(first && !first.startsWith('--') ? first : undefined, opts);
   if (cmd === 'ejmhj') return runEjmhj(config(), first && !first.startsWith('--') ? first : undefined, opts);
   if (cmd === 'worker') return worker();
@@ -2638,6 +2718,7 @@ function setConfigPath(file) {
 
 module.exports = {
   buildReportPrompt,
+  catchup,
   completeReportReferences,
   config,
   extractExternalReferences,

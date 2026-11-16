@@ -1,6 +1,6 @@
 # 🤔 onmhj
 
-Codex/Claude Code용 AI 세션 작업 로그 캡처 플러그인.
+Codex/Claude Code/DeepSeek Harness(DSH)용 AI 세션 작업 로그 캡처 플러그인.
 
 `onmhj`는 로컬 AI 코딩 세션 이벤트를 기록하고, 여러 컴퓨터의 기록을 병합한 뒤, git 기반 report repo에 날짜별 작업 로그를 발행한다. "오늘뭐했지" 캡처가 목적이고, `ejmhj`는 이 로그를 소비해 "어제뭐했지" 리포트를 만든다.
 
@@ -86,7 +86,9 @@ node bin/onmhj.js flush 2026-07-09 --no-push
 | `onmhj ejmhj [date]` | 어제 또는 지정 작업일의 raw 근거와 최종보고서 발행 |
 | `onmhj inject --text=...` | 수동 이벤트 1건 추가 |
 | `onmhj import <events.jsonl>` | 정규화 event 또는 OpenAI-compatible request/response capture import |
-| `onmhj sessions [--publish]` | Codex·Claude transcript 증분 수집 및 선택적 raw-only 단일 커밋 발행 |
+| `onmhj sessions [--publish]` | Codex·Claude·DSH transcript 증분 수집 및 선택적 raw-only 단일 커밋 발행 |
+| `onmhj catchup` | lifecycle hook 없이 transcript 수집과 기한 도래 report job 실행 |
+| `onmhj schedule install\|uninstall\|status` | `catchup`을 OS 주기 작업(launchd, systemd user timer, 작업 스케줄러)으로 1시간마다 실행 등록 |
 | `onmhj worker` | pending report job 처리 |
 | `onmhj selftest` | 현재 사용자 설정을 바꾸지 않고 격리된 내장 검증 실행 |
 
@@ -115,9 +117,11 @@ OpenAI-compatible capture record는 `provider`, `tsUtc`, `cwd`, 전체 `request`
 
 ## Canonical Session
 
-`onmhj sessions`는 Codex와 Claude transcript를 증분 수집한다. 각 canonical `AISessionTurn`에는 실제 사용자 요청과 존재하는 경우 최종 답변만 포함한다. 알려진 tool result, skill injection, notification, command, compaction record는 원본 transcript에만 남긴다. Canonical user prompt와 최종 answer는 redaction 후 전체를 저장한다.
+`onmhj sessions`는 Codex, Claude, DSH transcript를 증분 수집한다. 각 canonical `AISessionTurn`에는 실제 사용자 요청과 존재하는 경우 최종 답변만 포함한다. 알려진 tool result, skill injection, notification, command, compaction record는 원본 transcript에만 남긴다. Canonical user prompt와 최종 answer는 redaction 후 전체를 저장한다.
 
 최종 assistant 답변에 인용된 공개 Markdown 링크, HTTP(S) URL, DOI는 turn의 `references` 배열로 정규화한다. 로컬 파일, localhost, 사설망 주소, 로컬 전용 hostname, 인증정보가 포함된 URL과 민감한 인증 query parameter가 있는 URL은 제외하고 추적 parameter와 fragment는 제거한다. 새 최종보고서는 작업을 번호가 있는 Task로 묶고 배경·과정·결정·결과를 Task 안에 작성하며, 각 reference는 관련 Task의 `참고 자료` 또는 `References` 하위 섹션에만 배치한다. Tool record와 browsing history는 수집하지 않는다.
+
+DSH에는 lifecycle hook이 없으므로 `$DSH_HOME/sessions`(기본 `~/.dsh/sessions`)의 세션은 scan으로만 수집한다. 고정된 checkout에서 `onmhj schedule install`을 한 번 실행하면 1시간마다 수집과 report 예약을 수행한다. 자세한 내용은 [Installation](./installation.md#dsh)을 참고한다. DSH subagent 세션과 fork 세션에 복사된 부모 기록은 제외하고, subagent 결과 수신 후 사용자 prompt 없이 이어진 turn은 직전 사용자 turn의 답변에 이어 붙인다.
 
 `onmhj config --auto-report=false`를 설정하면 `SessionStart`가 report job을 예약하지 않는다. 이후 `onmhj sessions --publish`는 registered repo를 pull하고 unresolved quarantine이 없는지 확인한 뒤, 성공적으로 replay한 현재 기기의 session 범위만 `raw/ai-sessions`에서 교체해 커밋과 push를 각각 한 번만 수행한다. 다른 기기, 다른 session, 다른 event type과 `reports/`, report job, confirmation은 변경하지 않는다.
 
