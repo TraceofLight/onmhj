@@ -129,6 +129,8 @@ node /path/to/onmhj/bin/onmhj.js config \
   --report-api-key-env=ONMHJ_LLM_API_KEY
 ```
 
+The key is read from the named environment variable. Scheduled `catchup` runs do not inherit shell variables, so set `--report-api-key-file=PATH` as a fallback: the file holds only the key, or `NAME: value` / `NAME=value` lines (for example DSH `~/.dsh/.credentials.yaml`) from which the line named by `--report-api-key-env` is used. `--report-api-effort=low|medium|high` sends `reasoning_effort` with each request; it is omitted when unset.
+
 Config is stored at:
 
 ```txt

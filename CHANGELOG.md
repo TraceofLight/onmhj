@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added `--report-api-key-file` so API mode can read its key from a file when the environment variable is absent, as in scheduled `catchup` runs.
+- Added `--report-api-effort` to send `reasoning_effort` with API report requests.
+- Streamed API report responses so long reasoning no longer hits proxy idle timeouts such as Cloudflare 524.
+
 ## 0.1.16 - 2026-11-17
 
 - Captured DeepSeek Harness (DSH) sessions from `$DSH_HOME/sessions` as `dsh` turns, skipping subagent sessions and parent history copied into forked sessions, and extending the last human turn with answers from prompt-less continuation turns.

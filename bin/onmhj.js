@@ -63,7 +63,7 @@ function usage() {
     'Usage:',
     '  onmhj hook <event>',
     '  onmhj register <git-repo-path> [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude]',
-    '  onmhj config [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude] [--report-agent-model=MODEL] [--report-agent-effort=low|medium|high] [--report-timeout-minutes=N] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME]',
+    '  onmhj config [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude] [--report-agent-model=MODEL] [--report-agent-effort=low|medium|high] [--report-timeout-minutes=N] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME] [--report-api-key-file=PATH] [--report-api-effort=low|medium|high]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj sessions [--publish] [--no-push]',
@@ -109,6 +109,8 @@ function config() {
     reportApiBaseUrl: cfg.reportApiBaseUrl || '',
     reportApiModel: cfg.reportApiModel || '',
     reportApiKeyEnv: cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV,
+    reportApiKeyFile: cfg.reportApiKeyFile || '',
+    reportApiEffort: cfg.reportApiEffort || '',
   };
 }
 
@@ -407,6 +409,8 @@ function parseOptions(args) {
     if (arg.startsWith('--report-api-base=')) opts.reportApiBaseUrl = arg.slice('--report-api-base='.length);
     if (arg.startsWith('--report-model=')) opts.reportApiModel = arg.slice('--report-model='.length);
     if (arg.startsWith('--report-api-key-env=')) opts.reportApiKeyEnv = arg.slice('--report-api-key-env='.length);
+    if (arg.startsWith('--report-api-key-file=')) opts.reportApiKeyFile = arg.slice('--report-api-key-file='.length);
+    if (arg.startsWith('--report-api-effort=')) opts.reportApiEffort = arg.slice('--report-api-effort='.length);
     if (arg.startsWith('--date=')) opts.date = arg.slice('--date='.length);
     if (arg.startsWith('--cwd=')) opts.cwd = arg.slice('--cwd='.length);
     if (arg.startsWith('--repo=')) opts.cwd = arg.slice('--repo='.length);
@@ -464,6 +468,9 @@ function validateConfigOptions(opts) {
   if (opts.reportAgentEffort && !['low', 'medium', 'high'].includes(opts.reportAgentEffort)) {
     throw new Error('report agent effort must be low, medium, or high');
   }
+  if (opts.reportApiEffort && !['low', 'medium', 'high'].includes(opts.reportApiEffort)) {
+    throw new Error('report API effort must be low, medium, or high');
+  }
   if (opts.reportTimeoutMinutes && !/^[1-9]\d*$/.test(opts.reportTimeoutMinutes)) {
     throw new Error('report timeout minutes must be a positive integer');
   }
@@ -473,7 +480,7 @@ function validateConfigOptions(opts) {
   if (opts.reportLanguage && !['en', 'ko'].includes(opts.reportLanguage)) {
     throw new Error('report language must be en or ko');
   }
-  for (const key of ['reportAgentModel', 'reportApiBaseUrl', 'reportApiModel', 'reportApiKeyEnv']) {
+  for (const key of ['reportAgentModel', 'reportApiBaseUrl', 'reportApiModel', 'reportApiKeyEnv', 'reportApiKeyFile']) {
     if (opts[key] && /[\r\n]/.test(opts[key])) throw new Error(`${key} must be a single line`);
   }
   for (const key of ['ownerName', 'ownerEmail']) {
@@ -505,6 +512,8 @@ function applyReportConfig(cfg, opts) {
   if (opts.reportApiBaseUrl) cfg.reportApiBaseUrl = opts.reportApiBaseUrl;
   if (opts.reportApiModel) cfg.reportApiModel = opts.reportApiModel;
   if (opts.reportApiKeyEnv) cfg.reportApiKeyEnv = opts.reportApiKeyEnv;
+  if (opts.reportApiKeyFile) cfg.reportApiKeyFile = path.resolve(opts.reportApiKeyFile);
+  if (opts.reportApiEffort) cfg.reportApiEffort = opts.reportApiEffort;
 }
 
 function reportRuntime(cfg) {
@@ -514,7 +523,9 @@ function reportRuntime(cfg) {
       baseUrl: cfg.reportApiBaseUrl,
       model: cfg.reportApiModel,
       apiKeyEnv: cfg.reportApiKeyEnv,
-      hasApiKey: Boolean(process.env[cfg.reportApiKeyEnv]),
+      apiKeyFile: cfg.reportApiKeyFile,
+      effort: cfg.reportApiEffort,
+      hasApiKey: hasReportApiKey(cfg, process.env),
     };
   }
   const provider = nativeAgentProvider(cfg);
@@ -531,7 +542,7 @@ function reportRuntime(cfg) {
 
 function configure(opts) {
   validateConfigOptions(opts);
-  if (!opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportAgent && !opts.reportAgentModel && !opts.reportAgentEffort && !opts.reportTimeoutMinutes && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv) {
+  if (!opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportAgent && !opts.reportAgentModel && !opts.reportAgentEffort && !opts.reportTimeoutMinutes && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv && !opts.reportApiKeyFile && !opts.reportApiEffort) {
     throw new Error(usage());
   }
   const cfg = config();
@@ -2034,6 +2045,7 @@ function claudeAgentEnvironment(env = process.env) {
 async function requestApi(url, options, body, fetchImpl = fetch) {
   const response = await fetchImpl(url, { ...options, body: JSON.stringify(body) });
   const text = await response.text();
+  if (response.ok && body && body.stream) return parseEventStream(text);
   let value;
   try {
     value = JSON.parse(text);
@@ -2048,13 +2060,63 @@ async function requestApi(url, options, body, fetchImpl = fetch) {
   return value;
 }
 
+// Collects streamed content deltas into the non-streaming response shape; reasoning deltas are dropped.
+function parseEventStream(text) {
+  let content = '';
+  for (const line of String(text).split(/\r?\n/)) {
+    const data = line.startsWith('data:') ? line.slice(5).trim() : '';
+    if (!data || data === '[DONE]') continue;
+    let event;
+    try {
+      event = JSON.parse(data);
+    } catch {
+      throw new Error('report API returned an invalid event stream');
+    }
+    if (event.error) throw new Error(`report API failed: ${redactSecrets(event.error.message || 'stream error')}`);
+    const delta = event.choices && event.choices[0] && event.choices[0].delta;
+    if (delta && typeof delta.content === 'string') content += delta.content;
+  }
+  return { choices: [{ message: { content } }] };
+}
+
+function reportApiKey(cfg, env, readFile = (file) => fs.readFileSync(file, 'utf8')) {
+  const name = cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV;
+  if (env[name]) return env[name];
+  return cfg.reportApiKeyFile ? apiKeyFromFile(readFile(cfg.reportApiKeyFile), name) : '';
+}
+
+// Accepts a file holding only the key, or `NAME: value` / `NAME=value` lines such as DSH credentials.
+function apiKeyFromFile(text, name) {
+  const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^${escaped}\\s*[:=]\\s*["']?([^"'\\s#]+)`);
+  for (const line of lines) {
+    const match = line.match(pattern);
+    if (match) return match[1];
+  }
+  return lines.length === 1 && !/\s/.test(lines[0]) ? lines[0] : '';
+}
+
+function hasReportApiKey(cfg, env) {
+  try {
+    return Boolean(reportApiKey(cfg, env));
+  } catch {
+    return false;
+  }
+}
+
+function reportApiKeySources(cfg) {
+  const name = cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV;
+  return cfg.reportApiKeyFile ? `${name} (env or ${cfg.reportApiKeyFile})` : name;
+}
+
 async function callReportBackend(cfg, prompt, deps = {}) {
   if (cfg.reportAuth === 'api') {
     if (!cfg.reportApiBaseUrl) throw new Error('report API base URL is required');
     if (!cfg.reportApiModel) throw new Error('report API model is required');
     const env = deps.env || process.env;
-    const apiKey = env[cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV];
-    if (!apiKey) throw new Error(`report API key is missing: ${cfg.reportApiKeyEnv || DEFAULT_REPORT_API_KEY_ENV}`);
+    const apiKey = reportApiKey(cfg, env, deps.readFile);
+    if (!apiKey) throw new Error(`report API key is missing: ${reportApiKeySources(cfg)}`);
     const callApi = deps.requestApi || requestApi;
     const result = await callApi(
       cfg.reportApiBaseUrl.replace(/\/$/, '') + '/chat/completions',
@@ -2063,7 +2125,12 @@ async function callReportBackend(cfg, prompt, deps = {}) {
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(reportBackendTimeoutMs(cfg)),
       },
-      { model: cfg.reportApiModel, messages: [{ role: 'user', content: prompt }] },
+      {
+        model: cfg.reportApiModel,
+        stream: true,
+        ...(cfg.reportApiEffort ? { reasoning_effort: cfg.reportApiEffort } : {}),
+        messages: [{ role: 'user', content: prompt }],
+      },
     );
     return result && result.choices && result.choices[0] && result.choices[0].message
       ? result.choices[0].message.content
@@ -2510,6 +2577,8 @@ function status() {
     `reportApiBase: ${cfg.reportApiBaseUrl || '(unset)'}`,
     `reportModel: ${cfg.reportApiModel || '(unset)'}`,
     `reportApiKeyEnv: ${cfg.reportApiKeyEnv}`,
+    `reportApiKeyFile: ${cfg.reportApiKeyFile || '(unset)'}`,
+    `reportApiEffort: ${cfg.reportApiEffort || '(unset)'}`,
     `confirmedThrough: ${localConfirmed}`,
     `confirmedFloor: ${floor}`,
     `reportJobs: pending=${jobs.filter(job => job.status === 'pending').length} running=${jobs.filter(job => job.status === 'running').length} failed=${jobs.filter(job => job.status === 'failed').length} completed=${jobs.filter(job => job.status === 'completed').length}`,
