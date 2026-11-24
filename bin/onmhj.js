@@ -15,6 +15,7 @@ const {
 } = require('./session-parsers');
 const { DEFAULT_TARGET_BYTES, chunkRawEvents, planRawSegments } = require('./report-chunks');
 const { reviseReport } = require('./report-revise');
+const { EXTRACT_VERSION, generateFactReport } = require('./report-facts');
 const { cleanupMapCache, mapRawEvidence, reduceMapSummaries } = require('./report-map-reduce');
 const { applySchedule, schedulePlan } = require('./schedule');
 
@@ -64,7 +65,7 @@ function usage() {
     'Usage:',
     '  onmhj hook <event>',
     '  onmhj register <git-repo-path> [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude]',
-    '  onmhj config [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude] [--report-agent-model=MODEL] [--report-agent-effort=low|medium|high] [--report-timeout-minutes=N] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME] [--report-api-key-file=PATH] [--report-api-effort=low|medium|high] [--report-segment-agent=true|false] [--report-revise=true|false]',
+    '  onmhj config [--timezone=Area/City] [--device-id=ID] [--owner-name=NAME] [--owner-email=EMAIL] [--auto-report=true|false] [--report-lang=en|ko] [--report-auth=agent|api] [--report-agent=auto|codex|claude] [--report-agent-model=MODEL] [--report-agent-effort=low|medium|high] [--report-timeout-minutes=N] [--report-api-base=URL] [--report-model=MODEL] [--report-api-key-env=NAME] [--report-api-key-file=PATH] [--report-api-effort=low|medium|high] [--report-segment-agent=true|false] [--report-revise=true|false] [--report-pipeline=summary|facts]',
     '  onmhj inject --text=TEXT [--date=YYYY-MM-DD] [--cwd=PATH] [--source=NAME] [--source-id=ID]',
     '  onmhj import <events.jsonl>',
     '  onmhj sessions [--publish] [--no-push]',
@@ -114,6 +115,7 @@ function config() {
     reportApiEffort: cfg.reportApiEffort || '',
     reportSegmentAgent: cfg.reportSegmentAgent === true,
     reportRevise: cfg.reportRevise === true,
+    reportPipeline: cfg.reportPipeline === 'facts' ? 'facts' : 'summary',
   };
 }
 
@@ -416,6 +418,7 @@ function parseOptions(args) {
     if (arg.startsWith('--report-api-effort=')) opts.reportApiEffort = arg.slice('--report-api-effort='.length);
     if (arg.startsWith('--report-segment-agent=')) opts.reportSegmentAgent = arg.slice('--report-segment-agent='.length);
     if (arg.startsWith('--report-revise=')) opts.reportRevise = arg.slice('--report-revise='.length);
+    if (arg.startsWith('--report-pipeline=')) opts.reportPipeline = arg.slice('--report-pipeline='.length);
     if (arg.startsWith('--date=')) opts.date = arg.slice('--date='.length);
     if (arg.startsWith('--cwd=')) opts.cwd = arg.slice('--cwd='.length);
     if (arg.startsWith('--repo=')) opts.cwd = arg.slice('--repo='.length);
@@ -482,6 +485,9 @@ function validateConfigOptions(opts) {
   if (opts.autoReport !== undefined && !['true', 'false'].includes(opts.autoReport)) {
     throw new Error('auto report must be true or false');
   }
+  if (opts.reportPipeline && !['summary', 'facts'].includes(opts.reportPipeline)) {
+    throw new Error('report pipeline must be summary or facts');
+  }
   for (const key of ['reportSegmentAgent', 'reportRevise']) {
     if (opts[key] !== undefined && !['true', 'false'].includes(opts[key])) throw new Error(`${key} must be true or false`);
   }
@@ -524,6 +530,7 @@ function applyReportConfig(cfg, opts) {
   if (opts.reportApiEffort) cfg.reportApiEffort = opts.reportApiEffort;
   if (opts.reportSegmentAgent !== undefined) cfg.reportSegmentAgent = opts.reportSegmentAgent === 'true';
   if (opts.reportRevise !== undefined) cfg.reportRevise = opts.reportRevise === 'true';
+  if (opts.reportPipeline) cfg.reportPipeline = opts.reportPipeline;
 }
 
 function reportRuntime(cfg) {
@@ -552,7 +559,7 @@ function reportRuntime(cfg) {
 
 function configure(opts) {
   validateConfigOptions(opts);
-  if (!opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportAgent && !opts.reportAgentModel && !opts.reportAgentEffort && !opts.reportTimeoutMinutes && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv && !opts.reportApiKeyFile && !opts.reportApiEffort && opts.reportSegmentAgent === undefined && opts.reportRevise === undefined) {
+  if (!opts.timeZone && !opts.deviceId && !opts.ownerName && !opts.ownerEmail && opts.autoReport === undefined && !opts.reportLanguage && !opts.reportAuth && !opts.reportAgent && !opts.reportAgentModel && !opts.reportAgentEffort && !opts.reportTimeoutMinutes && !opts.reportApiBaseUrl && !opts.reportApiModel && !opts.reportApiKeyEnv && !opts.reportApiKeyFile && !opts.reportApiEffort && opts.reportSegmentAgent === undefined && opts.reportRevise === undefined && !opts.reportPipeline) {
     throw new Error(usage());
   }
   const cfg = config();
@@ -2242,6 +2249,39 @@ async function reviseValidatedReport(cfg, date, raw, report, { language, referen
   }
 }
 
+// Extracted facts are cached per raw input and chunk layout so retries redo only grouping and writing.
+function factCache(cfg, date, raw, chunks) {
+  const hash = crypto.createHash('sha256')
+    .update(JSON.stringify({ version: EXTRACT_VERSION, raw, chunks: chunks.map(chunk => chunk.evidenceIds) }))
+    .digest('hex');
+  const file = path.join(cfg.stateDir, 'report-parts', date, `facts-${hash}.json`);
+  return {
+    read: () => readJson(file, null),
+    write: value => {
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(file, JSON.stringify(value) + '\n', { mode: 0o600 });
+    },
+  };
+}
+
+async function generateFactPipelineReport(cfg, date, raw, chunks, { language, references, runBackend }) {
+  const contract = reportContract(language);
+  const report = await generateFactReport({
+    date,
+    records: raw.split('\n').filter(Boolean).map(line => JSON.parse(line)),
+    chunks,
+    contract,
+    title: contract.title,
+    runPrompt: runBackend,
+    renderReference: referenceMarkdown,
+    log: stats => writeInternalLog(cfg, 'report_facts', { date, ...stats }),
+    cache: factCache(cfg, date, raw, chunks),
+  });
+  const validated = validateReport(completeReportReferences(report, references, language), date, language, '', references, { requireTaskFormat: true });
+  writeInternalLog(cfg, 'report_validation_passed', { date, attempt: 1, referenceCount: references.length, pipeline: 'facts' });
+  return validated;
+}
+
 async function generateReport(cfg, date, raw, deps = {}) {
   const language = cfg.reportLanguage || 'ko';
   const previousReport = deps.previousReport || '';
@@ -2250,6 +2290,9 @@ async function generateReport(cfg, date, raw, deps = {}) {
   const runBackend = async backendPrompt => redactSecrets(await callReportBackend(cfg, backendPrompt, deps));
   const segments = cfg.reportSegmentAgent ? await cachedRawSegments(cfg, date, raw, targetBytes, runBackend) : undefined;
   const chunks = chunkRawEvents(raw, { targetBytes, segments });
+  if (cfg.reportPipeline === 'facts' && !previousReport) {
+    return generateFactPipelineReport(cfg, date, raw, chunks, { language, references, runBackend });
+  }
   let prompt;
   let summaryTasks = [];
   if (chunks.length <= 1) {
@@ -2633,6 +2676,7 @@ function status() {
     `reportApiEffort: ${cfg.reportApiEffort || '(unset)'}`,
     `reportSegmentAgent: ${cfg.reportSegmentAgent}`,
     `reportRevise: ${cfg.reportRevise}`,
+    `reportPipeline: ${cfg.reportPipeline}`,
     `confirmedThrough: ${localConfirmed}`,
     `confirmedFloor: ${floor}`,
     `reportJobs: pending=${jobs.filter(job => job.status === 'pending').length} running=${jobs.filter(job => job.status === 'running').length} failed=${jobs.filter(job => job.status === 'failed').length} completed=${jobs.filter(job => job.status === 'completed').length}`,

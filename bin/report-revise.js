@@ -407,7 +407,7 @@ function normalizedTokens(line) {
   return new Set(String(line).toLowerCase().replace(/`/g, '').match(/[a-z0-9가-힣]+/g) || []);
 }
 
-// Drops follow-up bullets that repeat one from an earlier task; an emptied follow-up section is removed.
+// Drops follow-up bullets whose words exactly repeat an earlier task's bullet; an emptied follow-up section is removed.
 function dedupeFollowUps(bodies, contract) {
   const seen = [];
   return bodies.map(body => {
@@ -422,7 +422,7 @@ function dedupeFollowUps(bodies, contract) {
       const duplicate = seen.some(other => {
         let shared = 0;
         for (const token of tokens) if (other.has(token)) shared++;
-        return shared / Math.max(1, Math.min(tokens.size, other.size)) >= 0.8;
+        return shared === tokens.size && shared === other.size;
       });
       if (!duplicate) seen.push(tokens);
       return !duplicate;

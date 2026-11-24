@@ -204,11 +204,11 @@ test('removes follow-ups repeated across tasks', () => {
   const withFollowUp = (number, items) => `${task(number, `작업 ${number}`)}\n\n#### 후속 작업\n${items.map(item => `- ${item}`).join('\n')}`;
   const [first, second] = dedupeFollowUps([
     withFollowUp(1, ['NetBird 업그레이드 진행']),
-    withFollowUp(2, ['`NetBird` 업그레이드 진행', 'Traefik 용량 확인']),
+    withFollowUp(2, ['`NetBird` 업그레이드 진행', 'Traefik 용량 확인', 'Windows NetBird 업그레이드 진행']),
   ], contract);
   assert.match(first, /NetBird 업그레이드 진행/);
-  assert.doesNotMatch(second, /NetBird/);
-  assert.match(second, /#### 후속 작업\n- Traefik 용량 확인/);
+  assert.doesNotMatch(second, /- `NetBird` 업그레이드 진행/);
+  assert.match(second, /#### 후속 작업\n- Traefik 용량 확인\n- Windows NetBird 업그레이드 진행/);
   const [, emptied] = dedupeFollowUps([withFollowUp(1, ['같은 일']), withFollowUp(2, ['같은 일'])], contract);
   assert.doesNotMatch(emptied, /후속 작업/);
 });
