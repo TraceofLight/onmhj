@@ -2,15 +2,18 @@
 
 ## Unreleased
 
-- Added `--report-pipeline=facts`, a fact-first pipeline for local models: per-chunk fact extraction (kind, epistemic status, exact values) chained per session, goal planning with voted turn assignment, model-decided reassignment of off-topic facts, one-call review that also drops superseded facts, cited task writing with evidence markers, line-level verification, and extractive per-task summaries.
-- Added `--report-api-light-effort` to run the short pipeline judgments (grouping, review, verification, summary picks) at a lighter reasoning effort; on Basalt `none` disables thinking for them, which cut report time by about three quarters on the test days without measurable quality loss.
-- Added `--report-prefetch` to extract today's facts on every `catchup`; extraction is cached per chunk, so the nightly report mostly reuses finished chunks.
-- Logged per-stage call counts and timing in `report_facts`.
+## 0.1.17 - 2026-11-24
+
+- Added `--report-pipeline=facts`, an opt-in fact-first pipeline for smaller local models (default stays `summary`): per-chunk fact extraction with kind, epistemic status, importance, and exact values, chained per session; goal planning with five voted turn assignments; model-decided reassignment of off-topic facts; one-call review that also drops superseded facts; cited task writing sized to the work actually done; kind-based section placement; line-level verification; and one grounded summary sentence per task. On the test days it reached Claude-level scores on a local Qwen model; with Claude it costs 2.5-3.7x the tokens without a quality gain, so keep `summary` for Claude and Codex.
+- Added `--report-api-light-effort` to run short judgments (review, verification, polishing, summary sentences) at a lighter reasoning effort; extraction, grouping, reassignment, and writing keep `--report-api-effort`. On Basalt, `none` disables thinking for those steps.
+- Cached fact extraction per chunk and added `--report-prefetch` to extract today's facts on every `catchup`.
+- Logged per-stage call counts and timing in `report_facts`, and `report_revise_ignored` when `--report-revise` is set with the fact pipeline.
 - Added `--report-api-key-file` so API mode can read its key from a file when the environment variable is absent, as in scheduled `catchup` runs.
 - Added `--report-api-effort` to send `reasoning_effort` with API report requests.
 - Streamed API report responses so long reasoning no longer hits proxy idle timeouts such as Cloudflare 524.
-- Added `--report-segment-agent`: a model plans topic boundaries for sessions larger than one chunk from a compact turn index; code validates the plan, splits oversized segments by bytes, caches it per raw input, and falls back to byte packing.
-- Added `--report-revise`: after validation, each task is rewritten from its source turns (including later turns of the same sessions) with checks for values missing from the evidence, untranslated English phrases, glued hashes, and foreign scripts; a broken revision keeps the validated draft.
+- Added `--report-segment-agent`: a model plans topic boundaries for sessions larger than one chunk from a compact turn index; code validates the plan, splits oversized segments by bytes, caches it per session, and falls back to byte packing.
+- Added `--report-revise` for the summary pipeline: each validated task is rewritten from its source turns (including later turns of the same sessions) with checks for values missing from the evidence, untranslated English phrases, glued hashes, and foreign scripts; a broken revision keeps the validated draft.
+- Split the fact pipeline into stage modules under `bin/report-facts/` with shared helpers in `bin/report-util.js`.
 
 ## 0.1.16 - 2026-11-17
 

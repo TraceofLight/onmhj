@@ -50,7 +50,7 @@ test('Claude loader accepts default hook auto-discovery', t => {
   const plugins = JSON.parse(result.stdout);
   const inline = plugins.find(plugin => plugin.id === 'onmhj@inline');
   assert.ok(inline, 'onmhj@inline must be present');
-  assert.equal(inline.version, '0.1.16');
+  assert.equal(inline.version, '0.1.17');
   assert.equal(inline.enabled, true);
   assert.deepEqual(inline.errors || [], []);
 });
