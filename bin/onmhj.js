@@ -1253,13 +1253,9 @@ async function prefetchFacts(cfg, deps = {}) {
     const prepared = prepareRaw(cfg, date, { write: false, pull: false });
     if (!prepared) return;
     const started = Date.now();
-    const runBackend = async (prompt, options = {}) => redactSecrets(await callReportBackend(
-      options.effort && cfg.reportAuth === 'api' ? { ...cfg, reportApiEffort: options.effort } : cfg, prompt, deps,
-    ));
-    const segments = cfg.reportSegmentAgent ? await cachedRawSegments(cfg, date, prepared.raw, DEFAULT_TARGET_BYTES, runBackend) : undefined;
-    const chunks = chunkRawEvents(prepared.raw, { targetBytes: DEFAULT_TARGET_BYTES, segments });
-    const records = prepared.raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
-    const result = await prefetchExtraction({ records, chunks, runPrompt: runBackend, chunkCache: factChunkCache(cfg, date) });
+    const runBackend = reportBackend(cfg, deps);
+    const { chunks } = await rawChunks(cfg, date, prepared.raw, DEFAULT_TARGET_BYTES, runBackend);
+    const result = await prefetchExtraction({ records: rawRecords(prepared.raw), chunks, runPrompt: runBackend, chunkCache: factChunkCache(cfg, date) });
     writeInternalLog(cfg, 'report_prefetch', { date, chunks: chunks.length, facts: result.facts, cacheHits: result.cacheHits, seconds: Math.round((Date.now() - started) / 1000) });
   } finally {
     releaseLock(lock);
@@ -2247,17 +2243,9 @@ async function callReportBackend(cfg, prompt, deps = {}) {
   return result.stdout;
 }
 
-// Segment plans are cached per raw input so retries reuse the same chunks and their cached map summaries.
 // Segment plans are cached per session content, so a growing day re-plans only sessions that changed.
 async function cachedRawSegments(cfg, date, raw, targetBytes, runPrompt) {
-  const dir = path.join(cfg.stateDir, 'report-parts', date, 'segments');
-  const cache = {
-    read: key => readJson(path.join(dir, `${crypto.createHash('sha256').update(key).digest('hex')}.json`), null),
-    write: (key, value) => {
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(path.join(dir, `${crypto.createHash('sha256').update(key).digest('hex')}.json`), JSON.stringify(value) + '\n', { mode: 0o600 });
-    },
-  };
+  const cache = reportPartCache(cfg, date, 'segments');
   const segments = await planRawSegments(raw, { targetBytes, runPrompt, cache });
   writeInternalLog(cfg, 'report_segments_planned', { date, sessions: Object.keys(segments).length });
   return segments;
@@ -2266,7 +2254,7 @@ async function cachedRawSegments(cfg, date, raw, targetBytes, runPrompt) {
 // A revision that breaks the report contract is discarded in favor of the validated draft.
 async function reviseValidatedReport(cfg, date, raw, report, { language, references, summaryTasks, runBackend }) {
   try {
-    const records = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const records = rawRecords(raw);
     const revised = await reviseReport({ report, records, summaryTasks, contract: reportContract(language), runPrompt: runBackend });
     const validated = validateReport(revised.report, date, language, '', references, { requireTaskFormat: true });
     writeInternalLog(cfg, 'report_revision_passed', {
@@ -2285,9 +2273,19 @@ async function reviseValidatedReport(cfg, date, raw, report, { language, referen
   }
 }
 
-// Extraction results are cached per chunk (content + open items), so retries and hourly prefetches reuse finished chunks.
-function factChunkCache(cfg, date) {
-  const dir = path.join(cfg.stateDir, 'report-parts', date, 'fact-chunks');
+function rawRecords(raw) {
+  return raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+}
+
+// Chunks for the report and for prefetching are built the same way, so prefetched chunk caches match the report's chunks.
+async function rawChunks(cfg, date, raw, targetBytes, runBackend) {
+  const segments = cfg.reportSegmentAgent ? await cachedRawSegments(cfg, date, raw, targetBytes, runBackend) : undefined;
+  return { segments, chunks: chunkRawEvents(raw, { targetBytes, segments }) };
+}
+
+// Key-value JSON cache under report-parts/<date>/<name>; keys are hashed into private file names.
+function reportPartCache(cfg, date, name) {
+  const dir = path.join(cfg.stateDir, 'report-parts', date, name);
   const fileOf = key => path.join(dir, `${crypto.createHash('sha256').update(key).digest('hex')}.json`);
   return {
     read: key => readJson(fileOf(key), null),
@@ -2298,11 +2296,25 @@ function factChunkCache(cfg, date) {
   };
 }
 
+// Extraction results are cached per chunk (content + open items), so retries and hourly prefetches reuse finished chunks.
+function factChunkCache(cfg, date) {
+  return reportPartCache(cfg, date, 'fact-chunks');
+}
+
+// Report backend for pipeline stages; a stage may request a lower reasoning effort, which applies only to API mode.
+function reportBackend(cfg, deps = {}) {
+  return async (prompt, options = {}) => redactSecrets(await callReportBackend(
+    options.effort && cfg.reportAuth === 'api' ? { ...cfg, reportApiEffort: options.effort } : cfg,
+    prompt,
+    deps,
+  ));
+}
+
 async function generateFactPipelineReport(cfg, date, raw, chunks, { language, references, runBackend }) {
   const contract = reportContract(language);
   const report = await generateFactReport({
     date,
-    records: raw.split('\n').filter(Boolean).map(line => JSON.parse(line)),
+    records: rawRecords(raw),
     chunks,
     contract,
     title: contract.title,
@@ -2322,15 +2334,10 @@ async function generateReport(cfg, date, raw, deps = {}) {
   const previousReport = deps.previousReport || '';
   const references = rawReferences(raw);
   const targetBytes = deps.targetBytes ?? DEFAULT_TARGET_BYTES;
-  // A stage may request a lower reasoning effort for short judgments; it applies only to API mode.
-  const runBackend = async (backendPrompt, options = {}) => redactSecrets(await callReportBackend(
-    options.effort && cfg.reportAuth === 'api' ? { ...cfg, reportApiEffort: options.effort } : cfg,
-    backendPrompt,
-    deps,
-  ));
-  const segments = cfg.reportSegmentAgent ? await cachedRawSegments(cfg, date, raw, targetBytes, runBackend) : undefined;
-  const chunks = chunkRawEvents(raw, { targetBytes, segments });
+  const runBackend = reportBackend(cfg, deps);
+  const { segments, chunks } = await rawChunks(cfg, date, raw, targetBytes, runBackend);
   if (cfg.reportPipeline === 'facts' && !previousReport) {
+    if (cfg.reportRevise) writeInternalLog(cfg, 'report_revise_ignored', { date, reason: 'facts pipeline does not use the revision pass' });
     return generateFactPipelineReport(cfg, date, raw, chunks, { language, references, runBackend });
   }
   let prompt;

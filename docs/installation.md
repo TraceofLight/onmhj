@@ -147,7 +147,7 @@ node /path/to/onmhj/bin/onmhj.js config \
   --report-api-effort=medium --report-api-light-effort=none --report-prefetch=true
 ```
 
-`--report-api-light-effort` applies only to short judgment steps; extraction and writing keep `--report-api-effort`. Leave it unset for servers that do not accept that effort value. `--report-prefetch=true` makes each `catchup` extract today's new turns ahead of time.
+The fact pipeline does not use `--report-revise`; when both are set, the revision setting is ignored and `report_revise_ignored` is logged. `--report-api-light-effort` applies only to short judgment steps; extraction and writing keep `--report-api-effort`. Leave it unset for servers that do not accept that effort value. `--report-prefetch=true` makes each `catchup` extract today's new turns ahead of time.
 
 Config is stored at:
 

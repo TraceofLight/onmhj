@@ -2,6 +2,8 @@
 
 // Evidence-grounded revision pass for a drafted final report (local-model quality aid).
 
+const { clip, mapLimit } = require('./report-util');
+
 const TASK_HEADING = /^### T(\d+)\. .+$/;
 const EVIDENCE_CHARS = 48000;
 const CITED_ANSWER_CHARS = 6000;
@@ -68,11 +70,6 @@ function matchEvidenceIds(taskText, summaryTasks) {
     .filter(item => item.score >= best * 0.6)
     .slice(0, 5)
     .flatMap(item => item.task.evidenceIds || []))];
-}
-
-function clip(text, limit) {
-  const value = String(text || '');
-  return value.length > limit ? `${value.slice(0, limit)} …(생략)` : value;
 }
 
 // Cited turns plus later turns of the same sessions, so later resolutions and corrections stay visible.
@@ -290,19 +287,6 @@ function replaceSummary(head, contract, bullets) {
 function validSummary(text) {
   const lines = String(text || '').trim().split('\n').filter(line => line.trim());
   return lines.length && lines.every(line => /^- \S/.test(line) && !/https?:\/\//.test(line)) ? lines.join('\n') : '';
-}
-
-async function mapLimit(items, limit, worker) {
-  const results = new Array(items.length);
-  let next = 0;
-  const run = async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await worker(items[index], index);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
-  return results;
 }
 
 function taskTitle(text) {

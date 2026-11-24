@@ -1,24 +1,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const {
-  attachMissing,
-  buildTurns,
-  deterministicFlags,
-  finalizeTask,
-  generateFactReport,
-  parseExtraction,
-  parseAssign,
-  parseGoals,
-  parseTaskMarkdown,
-  placeByKind,
-  acceptSentence,
-  polishTask,
-  reassignFacts,
-  referenceTasks,
-  reviewFacts,
-  voteAssignments,
-} = require('../bin/report-facts');
+const { generateFactReport } = require('../bin/report-facts');
+const { buildTurns } = require('../bin/report-facts/turns');
+const { extractFacts, parseExtraction } = require('../bin/report-facts/extract');
+const { attachMissing, parseAssign, parseGoals, reassignFacts, voteAssignments } = require('../bin/report-facts/group');
+const { parseTaskMarkdown } = require('../bin/report-facts/task-markdown');
+const { reviewFacts } = require('../bin/report-facts/review');
+const { placeByKind } = require('../bin/report-facts/write');
+const { applyVerification, deterministicFlags, polishTask } = require('../bin/report-facts/verify');
+const { acceptSentence, finalizeTask, referenceTasks } = require('../bin/report-facts/assemble');
 
 const contract = {
   title: '뭐 했지',
@@ -112,9 +103,57 @@ test('finalizes a task without markers and fills empty required sections', () =>
   assert.match(body, /#### 참고 자료\n\n- \[문서\]\(https:\/\/example\.com\/doc\)$/);
 });
 
-test('generates a cited, verified report end to end with a scripted model', async () => {
-  const stats = [];
+// Scripted model for the whole pipeline; every prompt type is handled explicitly and anything else is recorded as unexpected.
+function scriptedModel({ summarySentence }) {
   const efforts = [];
+  const unexpected = [];
+  const runPrompt = async (prompt, options = {}) => {
+    efforts.push([prompt.slice(0, 12), options.effort]);
+    if (prompt.startsWith('너는 AI 작업 세션 기록에서')) {
+      if (prompt.includes('[t3 ')) {
+        return JSON.stringify({ facts: [{ turn: 't3', target: '개념', topic: '양자역학', kind: '결과', status: '확인', text: '파동함수를 설명했다.', values: [] }] });
+      }
+      return JSON.stringify({
+        facts: [
+          { turn: 't1', target: '서버', topic: '로그', kind: '요청', status: '확인', text: '보존 기간 결정을 요청했다.', values: [] },
+          { turn: 't1', target: '서버', topic: '로그', kind: '결과', status: '확인', text: '90일로 설정하고 push했다.', values: ['abc1234'] },
+          { turn: 't2', target: '서버', topic: '로그', kind: '후속', status: '예상', text: '재시작 후 적용될 것이다.', values: [] },
+        ],
+        corrections: [{ wrong: '30일', correct: '90일', turn: 't2' }],
+      });
+    }
+    if (prompt.startsWith('아래는 하루 동안의 대화 턴')) return '{"goals":[{"title":"로그 보존 설정","description":"보존 기간"},{"title":"양자역학 설명","description":"개념"}]}';
+    if (prompt.startsWith('각 대화 턴이 어느 작업 목표에')) return '{"assign":{"t1":1,"t2":1,"t3":2}}';
+    if (prompt.startsWith('아래 사실들은 지금 배정된 Task와')) return '{"move":{}}';
+    if (prompt.startsWith('너는 사실 검토자다')) return '{"facts":[],"drop":[]}';
+    if (prompt.startsWith('너는 하루 작업 보고서의 Task')) {
+      const number = Number(prompt.match(/`### T(\d+)\. 제목`/)[1]);
+      return number === 1
+        ? '### T1. 로그 보존 설정\n#### 배경과 목적\n- 보존 기간 결정을 요청했다. {{ev:f1}}\n#### 수행 과정\n- 확인된 내용 없음\n#### 결정\n- 확인된 내용 없음\n#### 결과\n- 90일로 설정하고 커밋 `abc1234`를 push했다. {{ev:f2}}\n#### 후속 작업\n- 재시작 후 적용을 확인했다. {{ev:f3}}'
+        : '### T2. 양자역학 설명\n#### 배경과 목적\n- 확인된 내용 없음\n#### 수행 과정\n- 확인된 내용 없음\n#### 결정\n- 확인된 내용 없음\n#### 결과\n- 파동함수를 설명했다. {{ev:f4}}';
+    }
+    if (prompt.startsWith('너는 작업 보고서 검증자다')) {
+      const line = prompt.split('\n').find(row => row.includes('재시작 후 적용을 확인했다'));
+      return line ? JSON.stringify({ fixes: [{ n: Number(line.split(' | ')[0]), replacement: '- 재시작 후 적용될 예정이다. {{ev:f3}}' }] }) : '{"fixes":[]}';
+    }
+    if (prompt.startsWith('다음 Task 본문만 보고')) {
+      assert.doesNotMatch(prompt, /\{\{ev:/);
+      if (!summarySentence) return '';
+      return prompt.includes('로그 보존 설정') ? '보존 기간을 90일로 정하고 `abc1234`를 push했다.' : '파동함수를 설명했다.';
+    }
+    if (prompt.startsWith('다음은 하루 작업 보고서의 Task 하나다')) {
+      assert.doesNotMatch(prompt, /\{\{ev:/);
+      return 'not json';
+    }
+    unexpected.push(prompt.slice(0, 40));
+    throw new Error(`unexpected prompt: ${prompt.slice(0, 40)}`);
+  };
+  return { runPrompt, efforts, unexpected };
+}
+
+async function runScripted(options) {
+  const model = scriptedModel(options);
+  const stats = [];
   const report = await generateFactReport({
     date: '2026-11-14',
     records,
@@ -125,56 +164,36 @@ test('generates a cited, verified report end to end with a scripted model', asyn
     lightEffort: 'none',
     renderReference: reference => `[${reference.title}](${reference.url})`,
     log: value => stats.push(value),
-    runPrompt: async (prompt, options = {}) => {
-      efforts.push([prompt.slice(0, 12), options.effort]);
-      if (prompt.startsWith('너는 AI 작업 세션 기록에서')) {
-        if (prompt.includes('[t3 ')) {
-          return JSON.stringify({ facts: [{ turn: 't3', target: '개념', topic: '양자역학', kind: '결과', status: '확인', text: '파동함수를 설명했다.', values: [] }] });
-        }
-        return JSON.stringify({
-          facts: [
-            { turn: 't1', target: '서버', topic: '로그', kind: '요청', status: '확인', text: '보존 기간 결정을 요청했다.', values: [] },
-            { turn: 't1', target: '서버', topic: '로그', kind: '결과', status: '확인', text: '90일로 설정하고 push했다.', values: ['abc1234'] },
-            { turn: 't2', target: '서버', topic: '로그', kind: '후속', status: '예상', text: '재시작 후 적용될 것이다.', values: [] },
-          ],
-          corrections: [{ wrong: '30일', correct: '90일', turn: 't2' }],
-        });
-      }
-      if (prompt.startsWith('아래는 하루 동안의 대화 턴')) return '{"goals":[{"title":"로그 보존 설정","description":"보존 기간"},{"title":"양자역학 설명","description":"개념"}]}';
-      if (prompt.startsWith('각 대화 턴이 어느 작업 목표에')) return '{"assign":{"t1":1,"t2":1,"t3":2}}';
-      if (prompt.startsWith('너는 사실 분류 검토자다')) return '{"facts":[]}';
-      if (prompt.startsWith('너는 하루 작업 보고서의 Task')) {
-        const number = Number(prompt.match(/`### T(\d+)\. 제목`/)[1]);
-        return number === 1
-          ? '### T1. 로그 보존 설정\n#### 배경과 목적\n- 보존 기간 결정을 요청했다. {{ev:f1}}\n#### 수행 과정\n- 확인된 내용 없음\n#### 결정\n- 확인된 내용 없음\n#### 결과\n- 90일로 설정하고 커밋 `abc1234`를 push했다. {{ev:f2}}\n#### 후속 작업\n- 재시작 후 적용을 확인했다. {{ev:f3}}'
-          : '### T2. 양자역학 설명\n#### 배경과 목적\n- 확인된 내용 없음\n#### 수행 과정\n- 확인된 내용 없음\n#### 결정\n- 확인된 내용 없음\n#### 결과\n- 파동함수를 설명했다. {{ev:f4}}';
-      }
-      if (prompt.startsWith('너는 작업 보고서 검증자다')) {
-        const line = prompt.split('\n').find(row => row.includes('재시작 후 적용을 확인했다'));
-        return line ? JSON.stringify({ fixes: [{ n: Number(line.split(' | ')[0]), replacement: '- 재시작 후 적용될 예정이다. {{ev:f3}}' }] }) : '{"fixes":[]}';
-      }
-      if (prompt.startsWith('다음은 하루 작업 보고서')) {
-        assert.doesNotMatch(prompt, /\{\{ev:/);
-        return 'not json';
-      }
-      throw new Error(`unexpected prompt: ${prompt.slice(0, 40)}`);
-    },
+    runPrompt: model.runPrompt,
   });
+  assert.deepEqual(model.unexpected, []);
+  return { report, stats: stats[0], efforts: model.efforts };
+}
 
-  assert.match(report, /^# 2026-11-14 뭐 했지\n\n## 오늘의 요약\n\n- 로그 보존 설정: 90일로 설정하고 커밋 `abc1234`를 push했다\.\n- 양자역학 설명: 파동함수를 설명했다\.\n\n## 작업별 기록\n\n### T1\. 로그 보존 설정/);
+test('generates a cited, verified report end to end with a scripted model', async () => {
+  const { report, stats, efforts } = await runScripted({ summarySentence: true });
+
+  assert.match(report, /^# 2026-11-14 뭐 했지\n\n## 오늘의 요약\n\n- 로그 보존 설정: 보존 기간을 90일로 정하고 `abc1234`를 push했다\.\n- 양자역학 설명: 파동함수를 설명했다\.\n\n## 작업별 기록\n\n### T1\. 로그 보존 설정/);
   assert.match(report, /#### 후속 작업\n\n- 재시작 후 적용될 예정이다\.\n\n#### 참고 자료\n\n- \[문서\]\(https:\/\/example\.com\/doc\)/);
   assert.doesNotMatch(report, /\{\{ev:/);
   assert.match(report, /### T2\. 양자역학 설명/);
   assert.deepEqual(
-    { facts: stats[0].facts, tasks: stats[0].tasks, corrections: stats[0].corrections, flags: stats[0].flags, fixes: stats[0].fixes, remainingFlags: stats[0].remainingFlags },
+    { facts: stats.facts, tasks: stats.tasks, corrections: stats.corrections, flags: stats.flags, fixes: stats.fixes, remainingFlags: stats.remainingFlags },
     { facts: 4, tasks: 2, corrections: 1, flags: 1, fixes: 1, remainingFlags: 0 },
   );
-  assert.ok(efforts.filter(([head]) => head.startsWith('너는 AI 작업')).every(([, effort]) => effort === undefined));
-  assert.ok(efforts.filter(([head]) => head.startsWith('너는 하루 작업 보고')).every(([, effort]) => effort === undefined));
-  assert.ok(efforts.filter(([head]) => head.startsWith('너는 사실 검토자')).every(([, effort]) => effort === 'none'));
-  assert.ok(efforts.filter(([head]) => head.startsWith('너는 작업 보고서 검증')).every(([, effort]) => effort === 'none'));
-  assert.deepEqual(stats[0].rules, { status: { flagged: 1, changed: 1 } }
-  );
+  assert.deepEqual(stats.rules, { status: { flagged: 1, changed: 1 } });
+  const effortOf = head => [...new Set(efforts.filter(([prefix]) => prefix.startsWith(head)).map(([, effort]) => effort))];
+  assert.deepEqual(effortOf('너는 AI 작업'), [undefined]);
+  assert.deepEqual(effortOf('너는 하루 작업 보고'), [undefined]);
+  assert.deepEqual(effortOf('아래는 하루 동안의'), [undefined]);
+  assert.deepEqual(effortOf('너는 사실 검토자'), ['none']);
+  assert.deepEqual(effortOf('너는 작업 보고서 검증'), ['none']);
+  assert.deepEqual(effortOf('다음 Task 본문만'), ['none']);
+});
+
+test('falls back to the latest verified result line when the summary sentence is rejected', async () => {
+  const { report } = await runScripted({ summarySentence: false });
+  assert.match(report, /## 오늘의 요약\n\n- 로그 보존 설정: 90일로 설정하고 커밋 `abc1234`를 push했다\.\n- 양자역학 설명: 파동함수를 설명했다\.\n/);
 });
 
 test('moves bullets to the section of their facts kind and keeps ties in place', () => {
@@ -331,7 +350,7 @@ test('normalizes placeholder variants to the contract wording', () => {
 });
 
 test('reuses cached chunk extractions with stable ids and keeps resolutions across chunks', async () => {
-  const { extractFacts: extract } = require('../bin/report-facts');
+  const extract = extractFacts;
   const turns = buildTurns(records);
   const turnsById = new Map(turns.map(turn => [turn.id, turn]));
   const chunks = [{ chunkId: 'sha256:aaa111', evidenceIds: ['s1:a'] }, { chunkId: 'sha256:bbb222', evidenceIds: ['s1:b'] }];
@@ -384,4 +403,91 @@ test('rejects summary sentences that add confirmation verbs not present in the t
   const item = { lines: ['### T1. GLM 검토', '#### 결과', '- 현행 머신에서는 성능 저하가 예상된다. {{ev:f1}}'] };
   assert.equal(acceptSentence('현행 머신에서는 성능 저하를 확인했다.', item), '');
   assert.equal(acceptSentence('현행 머신에서는 성능 저하가 예상된다.', item), '현행 머신에서는 성능 저하가 예상된다.');
+});
+
+test('applies verifier fixes to titles and cited bullets and ignores invalid ones', () => {
+  const written = parseTaskMarkdown(taskOutput, contract, 1, ['f1', 'f2', 'f3']);
+  const lineOf = text => written.lines.findIndex(line => line.includes(text));
+  const fixes = [
+    { n: 0, replacement: '### T1. 로그 보존 기간 설정' },
+    { n: 0, replacement: '### T9. 번호 변경' },
+    { n: lineOf('재시작 후 적용을 확인했다'), replacement: '- 재시작 후 적용될 예정이다. {{ev:f3}}' },
+    { n: lineOf('보존 기간을 정하려 했다'), replacement: '- 근거 표시 없는 문장' },
+    { n: lineOf('커밋 `abc1234`'), replacement: '' },
+    { n: lineOf('#### 결과'), replacement: '- 제목 줄은 고치지 않는다. {{ev:f2}}' },
+    { n: lineOf('보존 기간을 90일로 정했다'), replacement: '- 두 줄\n- 금지 {{ev:f2}}' },
+    null,
+  ];
+  const result = applyVerification(written, JSON.stringify({ fixes }), contract, 1, ['f1', 'f2', 'f3']);
+  assert.equal(result.lines[0], '### T1. 로그 보존 기간 설정');
+  assert.ok(result.lines.includes('- 재시작 후 적용될 예정이다. {{ev:f3}}'));
+  assert.ok(result.lines.includes('- 로그 보존 기간을 정하려 했다. {{ev:f1}}'));
+  assert.ok(!result.lines.some(line => line.includes('abc1234')));
+  assert.ok(result.lines.includes('- 보존 기간을 90일로 정했다. {{ev:f2}}'));
+  assert.equal(result.applied, 3);
+  assert.throws(() => applyVerification(written, '{"fixes":{}}', contract, 1, ['f1', 'f2', 'f3']), /fixes must be an array/);
+  const unchanged = applyVerification(written, JSON.stringify({ fixes: [{ n: 0, replacement: written.lines[0] }] }), contract, 1, ['f1', 'f2', 'f3']);
+  assert.equal(unchanged.applied, 0);
+});
+
+test('routes light effort only to judgment stages and accounts calls per stage', async () => {
+  const { createStageRunner, effortFor } = require('../bin/report-facts/stage-runner');
+  assert.deepEqual(['extract', 'group', 'reassign', 'write'].map(stage => effortFor(stage, 'none')), [undefined, undefined, undefined, undefined]);
+  assert.deepEqual(['review', 'verify', 'polish', 'summary'].map(stage => effortFor(stage, 'none')), ['none', 'none', 'none', 'none']);
+  assert.equal(effortFor('review', ''), undefined);
+  const seen = [];
+  const runner = createStageRunner({ runPrompt: async (prompt, options) => { seen.push(options.effort); return 'ok!'; }, lightEffort: 'none' });
+  await runner.forStage('write')('abcd');
+  await runner.forStage('review')('ab');
+  await runner.forStage('review')('cd');
+  assert.deepEqual(seen, [undefined, 'none', 'none']);
+  const stats = runner.stats();
+  assert.deepEqual(Object.keys(stats), ['write', 'review']);
+  assert.equal(stats.review.calls, 2);
+  assert.equal(stats.write.promptKChars, 0);
+  const failing = createStageRunner({ runPrompt: async () => { throw new Error('boom'); } });
+  await assert.rejects(() => failing.forStage('verify')('x'), /boom/);
+  assert.equal(failing.stats().verify.calls, 1);
+});
+
+test('salvages facts around braces and escaped quotes inside strings and stops at the array end', () => {
+  const turns = buildTurns(records);
+  const broken = '{"facts":[{"turn":"t1","kind":"결과","status":"확인","text":"설정 {a: \\"b}\\"}를 적용했다.","values":[]},'
+    + '{"turn":"t1","kind":"수행","status":"확인","text":"중첩 {\\"x\\": [1,2]} 확인","values":["x"],"meta":{"k":{"z":1}}}],'
+    + '"corrections":[{"wrong":"30일","correct":"90일","turn":"t1"}],"resolved":[{"id":"f1"';
+  const parsed = parseExtraction(broken, turns, [{ id: 'f1', text: '열린 항목' }]);
+  assert.deepEqual(parsed.facts.map(fact => fact.text), ['설정 {a: "b}"}를 적용했다.', '중첩 {"x": [1,2]} 확인']);
+  assert.deepEqual(parsed.corrections.map(item => item.correct), ['90일']);
+  assert.deepEqual(parsed.resolved, []);
+});
+
+test('finds reassignment candidates by foreign targets and by topic words', () => {
+  const { reassignCandidates, topicFitsElsewhere } = require('../bin/report-facts/group');
+  const factsById = new Map([
+    ['a1', { id: 'a1', target: 'GPU 서버', topic: 'GPU 진단', text: 'PCIe 링크 확인' }],
+    ['a2', { id: 'a2', target: 'GPU 서버', topic: 'GPU 진단', text: 'PCIe 슬롯 점검' }],
+    ['a3', { id: 'a3', target: 'GPU 서버', topic: '보안 점검', text: '방화벽 ufw 비활성 확인' }],
+    ['b1', { id: 'b1', target: 'NAS', topic: '차단', text: 'DSM 차단 목록' }],
+    ['b2', { id: 'b2', target: 'GPU 서버', topic: '보안', text: '방화벽 ufw 설정 권고' }],
+    ['b3', { id: 'b3', target: 'NAS', topic: '차단', text: 'DSM 로그 확인' }],
+  ]);
+  const tasks = [{ factIds: ['a1', 'a2', 'a3'] }, { factIds: ['b1', 'b2', 'b3'] }];
+  const candidates = reassignCandidates(tasks, factsById).map(item => `${item.id}@${item.task}`);
+  assert.ok(candidates.includes('b2@1'));
+  assert.ok(!candidates.includes('a1@0'));
+  const bags = tasks.map(task => new Map());
+  assert.equal(topicFitsElsewhere({ topic: '', text: '' }, 0, bags), false);
+});
+
+test('keeps a bullet in place when its cited kinds tie', () => {
+  const written = parseTaskMarkdown(taskOutput, contract, 1, ['f1', 'f2', 'f3']);
+  const factsById = new Map([
+    ['f1', { id: 'f1', kind: '요청' }],
+    ['f2', { id: 'f2', kind: '결과' }],
+    ['f3', { id: 'f3', kind: '요청' }],
+  ]);
+  const tie = parseTaskMarkdown(taskOutput.replace('{{ev:f3}}', '{{ev:f1,f2}}'), contract, 1, ['f1', 'f2', 'f3']);
+  const placed = placeByKind(tie, contract, factsById);
+  assert.match(placed, /#### 결과\n[\s\S]*- 재시작 후 적용을 확인했다\. \{\{ev:f1,f2\}\}/);
+  assert.ok(placeByKind(written, contract, factsById).includes('#### 배경과 목적\n- 로그 보존 기간을 정하려 했다. {{ev:f1}}\n- 재시작 후 적용을 확인했다. {{ev:f3}}'));
 });
