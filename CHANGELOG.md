@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added `--report-pipeline=facts`, a fact-first pipeline for local models: per-chunk fact extraction (kind, epistemic status, exact values) chained per session, goal planning with voted turn assignment, model-decided reassignment of off-topic facts, one-call review that also drops superseded facts, cited task writing with evidence markers, line-level verification, and extractive per-task summaries.
+- Added `--report-api-light-effort` to run the short pipeline judgments (grouping, review, verification, summary picks) at a lighter reasoning effort; on Basalt `none` disables thinking for them, which cut report time by about three quarters on the test days without measurable quality loss.
+- Added `--report-prefetch` to extract today's facts on every `catchup`; extraction is cached per chunk, so the nightly report mostly reuses finished chunks.
+- Logged per-stage call counts and timing in `report_facts`.
 - Added `--report-api-key-file` so API mode can read its key from a file when the environment variable is absent, as in scheduled `catchup` runs.
 - Added `--report-api-effort` to send `reasoning_effort` with API report requests.
 - Streamed API report responses so long reasoning no longer hits proxy idle timeouts such as Cloudflare 524.

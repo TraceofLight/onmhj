@@ -13,7 +13,6 @@ const {
   parseTaskMarkdown,
   placeByKind,
   polishTask,
-  pruneSuperseded,
   reassignFacts,
   referenceTasks,
   reviewFacts,
@@ -114,6 +113,7 @@ test('finalizes a task without markers and fills empty required sections', () =>
 
 test('generates a cited, verified report end to end with a scripted model', async () => {
   const stats = [];
+  const efforts = [];
   const report = await generateFactReport({
     date: '2026-11-14',
     records,
@@ -121,9 +121,11 @@ test('generates a cited, verified report end to end with a scripted model', asyn
     contract,
     title: contract.title,
     concurrency: 1,
+    lightEffort: 'none',
     renderReference: reference => `[${reference.title}](${reference.url})`,
     log: value => stats.push(value),
-    runPrompt: async prompt => {
+    runPrompt: async (prompt, options = {}) => {
+      efforts.push([prompt.slice(0, 12), options.effort]);
       if (prompt.startsWith('너는 AI 작업 세션 기록에서')) {
         if (prompt.includes('[t3 ')) {
           return JSON.stringify({ facts: [{ turn: 't3', target: '개념', topic: '양자역학', kind: '결과', status: '확인', text: '파동함수를 설명했다.', values: [] }] });
@@ -166,6 +168,10 @@ test('generates a cited, verified report end to end with a scripted model', asyn
     { facts: stats[0].facts, tasks: stats[0].tasks, corrections: stats[0].corrections, flags: stats[0].flags, fixes: stats[0].fixes, remainingFlags: stats[0].remainingFlags },
     { facts: 4, tasks: 2, corrections: 1, flags: 1, fixes: 1, remainingFlags: 0 },
   );
+  assert.ok(efforts.filter(([head]) => head.startsWith('너는 AI 작업')).every(([, effort]) => effort === undefined));
+  assert.ok(efforts.filter(([head]) => head.startsWith('너는 하루 작업 보고')).every(([, effort]) => effort === undefined));
+  assert.ok(efforts.filter(([head]) => head.startsWith('너는 사실 검토자')).every(([, effort]) => effort === 'none'));
+  assert.ok(efforts.filter(([head]) => head.startsWith('너는 작업 보고서 검증')).every(([, effort]) => effort === 'none'));
   assert.deepEqual(stats[0].rules, { status: { flagged: 1, changed: 1 } }
   );
 });
@@ -185,8 +191,8 @@ test('moves bullets to the section of their facts kind and keeps ties in place',
 
 test('applies valid kind and status corrections from the review and ignores the rest', async () => {
   const facts = [
-    { id: 'f1', kind: '결과', status: '확인', text: '원인은 차단으로 보인다' },
-    { id: 'f2', kind: '결정', status: '확인', text: '드라이버를 설치했다' },
+    { id: 'f1', kind: '결과', status: '확인', text: '원인은 차단으로 보인다', time: '2026-11-14T10:00:00', values: [] },
+    { id: 'f2', kind: '결정', status: '확인', text: '드라이버를 설치했다', time: '2026-11-14T11:00:00', values: [] },
   ];
   const { facts: reviewed, changed } = await reviewFacts({
     facts,
@@ -301,7 +307,7 @@ test('drops only the URL scheme in written task lines instead of rejecting the t
   assert.ok(parsed.lines.some(line => line === '- 보존 기간을 example.com/doc 기준 90일로 정했다. {{ev:f2}}'));
 });
 
-test('keeps inline code intact when stripping URL schemes and prunes only facts superseded by later ones', async () => {
+test('keeps inline code intact when stripping URL schemes and drops only facts superseded by later ones', async () => {
   const parsed = parseTaskMarkdown(taskOutput.replace('- 보존 기간을 90일로 정했다.', '- `GET https://llm.example/v1/models`로 200을 받았고 `https://x.test`도 봤다.'), contract, 1, ['f1', 'f2', 'f3']);
   assert.ok(parsed.lines.includes('- `GET llm.example/v1/models`로 200을 받았고 `x.test`도 봤다. {{ev:f2}}'));
   const facts = [
@@ -309,9 +315,10 @@ test('keeps inline code intact when stripping URL schemes and prunes only facts 
     { id: 'f2', time: '2026-11-22T11:00:00', kind: '결과', status: '확인', text: 'journald 1.9GB 재측정', values: [] },
     { id: 'f3', time: '2026-11-22T12:00:00', kind: '후속', status: '계획', text: '삭제 예정', values: [] },
   ];
-  const { facts: kept, dropped } = await pruneSuperseded({
+  const { facts: kept, dropped } = await reviewFacts({
     facts,
-    runPrompt: async () => '{"drop":[{"id":"f1","by":"f2"},{"id":"f3","by":"f1"},{"id":"f9","by":"f2"}]}',
+    turns: [],
+    runPrompt: async () => '{"facts":[],"drop":[{"id":"f1","by":"f2"},{"id":"f3","by":"f1"},{"id":"f9","by":"f2"}]}',
   });
   assert.deepEqual(dropped, ['f1']);
   assert.deepEqual(kept.map(fact => fact.id), ['f2', 'f3']);
@@ -320,4 +327,28 @@ test('keeps inline code intact when stripping URL schemes and prunes only facts 
 test('normalizes placeholder variants to the contract wording', () => {
   const written = parseTaskMarkdown(taskOutput.replace('- 확인된 내용 없음', '- 확인된 내용은 없었다.'), contract, 1, ['f1', 'f2', 'f3']);
   assert.match(finalizeTask(written, contract, []), /#### 수행 과정\n\n- 확인된 내용 없음\n/);
+});
+
+test('reuses cached chunk extractions with stable ids and keeps resolutions across chunks', async () => {
+  const { extractFacts: extract } = require('../bin/report-facts');
+  const turns = buildTurns(records);
+  const turnsById = new Map(turns.map(turn => [turn.id, turn]));
+  const chunks = [{ chunkId: 'sha256:aaa111', evidenceIds: ['s1:a'] }, { chunkId: 'sha256:bbb222', evidenceIds: ['s1:b'] }];
+  const store = new Map();
+  const chunkCache = { read: key => store.get(key) || null, write: (key, value) => store.set(key, value) };
+  let calls = 0;
+  const runPrompt = async prompt => {
+    calls++;
+    if (prompt.includes('[t1 ')) return JSON.stringify({ facts: [{ turn: 't1', kind: '후속', status: '계획', text: '재시작 확인', values: [] }] });
+    assert.match(prompt, /aaa111\.1 \| 재시작 확인/);
+    return JSON.stringify({ facts: [{ turn: 't2', kind: '결과', status: '확인', text: '90일 확인', values: [] }], resolved: [{ id: 'aaa111.1', turn: 't2' }] });
+  };
+  const first = await extract({ chunks, turnsById, runPrompt, concurrency: 2, chunkCache });
+  assert.equal(calls, 2);
+  assert.deepEqual(first.facts.map(fact => `${fact.id}:${fact.turn}`), ['f1:t1', 'f2:t2']);
+  assert.deepEqual([...first.resolvedIds], ['f1']);
+  const second = await extract({ chunks, turnsById, runPrompt: async () => assert.fail('must reuse cache'), concurrency: 2, chunkCache });
+  assert.equal(second.cacheHits, 2);
+  assert.deepEqual(second.facts.map(fact => fact.text), ['재시작 확인', '90일 확인']);
+  assert.deepEqual([...second.resolvedIds], ['f1']);
 });

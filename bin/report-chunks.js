@@ -62,11 +62,17 @@ function plannedSegments(group, segmentsBySession) {
 }
 
 // Asks the segment planner to split sessions larger than the chunk target at topic boundaries.
-async function planRawSegments(raw, { targetBytes = DEFAULT_TARGET_BYTES, runPrompt }) {
+async function planRawSegments(raw, { targetBytes = DEFAULT_TARGET_BYTES, runPrompt, cache = null }) {
   const plans = {};
   for (const group of sessionGroups(parseRawRecords(raw))) {
     if (group[0].sessionKey.startsWith('event:')) continue;
     if (group.reduce((sum, record) => sum + record.bytes, 0) <= targetBytes) continue;
+    const key = JSON.stringify({ targetBytes, lines: group.map(record => record.line) });
+    const stored = cache && cache.read(key);
+    if (stored) {
+      if (stored.planned) plans[group[0].sessionKey] = stored.segments;
+      continue;
+    }
     const turns = group.map(record => ({
       id: record.evidenceId,
       bytes: record.bytes,
@@ -75,6 +81,7 @@ async function planRawSegments(raw, { targetBytes = DEFAULT_TARGET_BYTES, runPro
       answer: record.event.assistantResponse,
     }));
     const result = await segmentTurns(turns, { budgetBytes: targetBytes, runPrompt });
+    if (cache) cache.write(key, { planned: result.planned, segments: result.segments });
     if (result.planned) plans[group[0].sessionKey] = result.segments;
   }
   return plans;

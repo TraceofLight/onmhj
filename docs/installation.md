@@ -139,6 +139,16 @@ node /path/to/onmhj/bin/onmhj.js config --report-segment-agent=true --report-rev
 
 `--report-segment-agent=true` asks the model to split sessions larger than one 20 KiB chunk at topic boundaries, using only a turn index (time, size, and the first 200 characters of each prompt and answer). Invalid plans fall back to byte packing, and oversized segments are split by bytes. `--report-revise=true` rewrites each validated task from its source turns and later turns of the same sessions, then validates the whole report again; any task or report that fails validation keeps the draft. Expect roughly twice the generation time.
 
+For smaller local models, `--report-pipeline=facts` replaces summary-based generation with a fact-first pipeline (extraction, goal grouping, cited writing, verification). Recommended settings for a local OpenAI-compatible server such as Basalt:
+
+```sh
+node /path/to/onmhj/bin/onmhj.js config \
+  --report-auth=api --report-pipeline=facts --report-segment-agent=true \
+  --report-api-effort=medium --report-api-light-effort=none --report-prefetch=true
+```
+
+`--report-api-light-effort` applies only to short judgment steps; extraction and writing keep `--report-api-effort`. Leave it unset for servers that do not accept that effort value. `--report-prefetch=true` makes each `catchup` extract today's new turns ahead of time.
+
 Config is stored at:
 
 ```txt
