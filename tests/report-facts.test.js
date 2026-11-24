@@ -12,6 +12,7 @@ const {
   parseGoals,
   parseTaskMarkdown,
   placeByKind,
+  acceptSentence,
   polishTask,
   reassignFacts,
   referenceTasks,
@@ -351,4 +352,36 @@ test('reuses cached chunk extractions with stable ids and keeps resolutions acro
   assert.equal(second.cacheHits, 2);
   assert.deepEqual(second.facts.map(fact => fact.text), ['재시작 확인', '90일 확인']);
   assert.deepEqual([...second.resolvedIds], ['f1']);
+});
+
+test('keeps fact importance and treats missing or unknown values as core', () => {
+  const turns = buildTurns(records);
+  const parsed = parseExtraction(JSON.stringify({ facts: [
+    { turn: 't1', kind: '수행', status: '확인', importance: 'detail', text: 'ls를 실행했다.' },
+    { turn: 't1', kind: '결과', status: '확인', text: '90일로 설정했다.' },
+    { turn: 't1', kind: '결과', status: '확인', importance: 'minor', text: '로그를 봤다.' },
+  ] }), turns, []);
+  assert.deepEqual(parsed.facts.map(fact => fact.importance), ['detail', 'core', 'core']);
+});
+
+test('salvages complete facts from truncated extraction JSON', () => {
+  const turns = buildTurns(records);
+  const broken = '{"facts":[{"turn":"t1","kind":"결과","status":"확인","text":"90일로 설정했다. {괄호}","values":[]},{"turn":"t1","kind":"수행","status":"확인","text":"재시작 "따옴표" 했다"},{"turn":"t1","kind":"결과"';
+  const parsed = parseExtraction(broken, turns, []);
+  assert.deepEqual(parsed.facts.map(fact => fact.text), ['90일로 설정했다. {괄호}']);
+  assert.throws(() => parseExtraction('완전히 깨진 출력', turns, []), /JSON/);
+});
+
+test('accepts a generated summary sentence only when its values come from the task text', () => {
+  const item = { lines: ['### T1. 로그', '#### 결과', '- 보존 기간을 90일로 정하고 `abc1234`를 push했다. {{ev:f1}}'] };
+  assert.equal(acceptSentence('- 로그 보존을 90일로 정하고 `abc1234`로 반영했다.', item), '로그 보존을 90일로 정하고 `abc1234`로 반영했다.');
+  assert.equal(acceptSentence('로그 보존을 30일로 정했다.', item), '');
+  assert.equal(acceptSentence('첫 줄\n둘째 줄', item), '');
+  assert.equal(acceptSentence('{{ev:f1}} 로그를 정리했다.', item), '');
+});
+
+test('rejects summary sentences that add confirmation verbs not present in the task', () => {
+  const item = { lines: ['### T1. GLM 검토', '#### 결과', '- 현행 머신에서는 성능 저하가 예상된다. {{ev:f1}}'] };
+  assert.equal(acceptSentence('현행 머신에서는 성능 저하를 확인했다.', item), '');
+  assert.equal(acceptSentence('현행 머신에서는 성능 저하가 예상된다.', item), '현행 머신에서는 성능 저하가 예상된다.');
 });
