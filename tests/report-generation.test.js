@@ -659,6 +659,37 @@ test('rejects a key file without the named key', async () => {
   );
 });
 
+test('revises a validated API report and keeps the draft when the revision breaks the contract', async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-revise-'));
+  const cfg = {
+    stateDir,
+    reportAuth: 'api',
+    reportApiBaseUrl: 'https://llm.example/v1',
+    reportApiModel: 'report-model',
+    reportApiKeyEnv: 'ONMHJ_TEST_KEY',
+    reportRevise: true,
+  };
+  const revisedTask = validReport().slice(validReport().indexOf('### T1.')).replace('- 검증 완료', '- 검증을 완료했다.').trim();
+  const run = async (reviseOutput) => onmhj.generateReport(cfg, date, simpleRaw, {
+    env: { ONMHJ_TEST_KEY: 'secret-value' },
+    async requestApi(_url, _options, body) {
+      const prompt = body.messages[0].content;
+      if (prompt.startsWith('너는')) return { choices: [{ message: { content: reviseOutput } }] };
+      if (prompt.startsWith('다음은 하루 작업 보고서')) return { choices: [{ message: { content: '- 자동 보고서를 구현했다.' } }] };
+      return { choices: [{ message: { content: validReport() } }] };
+    },
+  });
+
+  const revised = await run(revisedTask);
+  assert.match(revised, /- 검증을 완료했다\./);
+  assert.match(revised, /## 오늘의 요약\n\n- 자동 보고서를 구현했다\./);
+
+  const kept = await run('### T9. 다른 번호');
+  assert.match(kept, /- 검증 완료\n/);
+  assert.match(kept, /## 오늘의 요약\n\n- 자동 보고서를 구현했다\./);
+  fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
 test('rejects incomplete API configuration before requesting a report', async () => {
   await assert.rejects(
     () => onmhj.generateReport({ reportAuth: 'api' }, date, simpleRaw),

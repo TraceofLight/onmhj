@@ -131,6 +131,14 @@ node /path/to/onmhj/bin/onmhj.js config \
 
 The key is read from the named environment variable. Scheduled `catchup` runs do not inherit shell variables, so set `--report-api-key-file=PATH` as a fallback: the file holds only the key, or `NAME: value` / `NAME=value` lines (for example DSH `~/.dsh/.credentials.yaml`) from which the line named by `--report-api-key-env` is used. `--report-api-effort=low|medium|high` sends `reasoning_effort` with each request; it is omitted when unset.
 
+Two optional quality passes target smaller local models; both are off by default and work with either auth mode:
+
+```sh
+node /path/to/onmhj/bin/onmhj.js config --report-segment-agent=true --report-revise=true
+```
+
+`--report-segment-agent=true` asks the model to split sessions larger than one 20 KiB chunk at topic boundaries, using only a turn index (time, size, and the first 200 characters of each prompt and answer). Invalid plans fall back to byte packing, and oversized segments are split by bytes. `--report-revise=true` rewrites each validated task from its source turns and later turns of the same sessions, then validates the whole report again; any task or report that fails validation keeps the draft. Expect roughly twice the generation time.
+
 Config is stored at:
 
 ```txt

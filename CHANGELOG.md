@@ -5,6 +5,8 @@
 - Added `--report-api-key-file` so API mode can read its key from a file when the environment variable is absent, as in scheduled `catchup` runs.
 - Added `--report-api-effort` to send `reasoning_effort` with API report requests.
 - Streamed API report responses so long reasoning no longer hits proxy idle timeouts such as Cloudflare 524.
+- Added `--report-segment-agent`: a model plans topic boundaries for sessions larger than one chunk from a compact turn index; code validates the plan, splits oversized segments by bytes, caches it per raw input, and falls back to byte packing.
+- Added `--report-revise`: after validation, each task is rewritten from its source turns (including later turns of the same sessions) with checks for values missing from the evidence, untranslated English phrases, glued hashes, and foreign scripts; a broken revision keeps the validated draft.
 
 ## 0.1.16 - 2026-11-17
 

@@ -268,13 +268,14 @@ async function mapRawEvidence(options) {
     language = 'ko',
     raw,
     runPrompt,
+    segments,
     stateDir,
     targetBytes = DEFAULT_TARGET_BYTES,
   } = options;
   if (!stateDir) throw new Error('stateDir is required for chunked report generation');
   if (typeof runPrompt !== 'function') throw new Error('runPrompt is required for chunked report generation');
 
-  const chunks = chunkRawEvents(raw, { targetBytes });
+  const chunks = chunkRawEvents(raw, { targetBytes, segments });
   const cacheDir = cacheDirectory(stateDir, date, language, raw, targetBytes);
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(cacheDir, 'manifest.json'), JSON.stringify({
