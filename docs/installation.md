@@ -129,6 +129,26 @@ node /path/to/onmhj/bin/onmhj.js config \
   --report-api-key-env=ONMHJ_LLM_API_KEY
 ```
 
+The key is read from the named environment variable. Scheduled `catchup` runs do not inherit shell variables, so set `--report-api-key-file=PATH` as a fallback: the file holds only the key, or `NAME: value` / `NAME=value` lines (for example DSH `~/.dsh/.credentials.yaml`) from which the line named by `--report-api-key-env` is used. `--report-api-effort=low|medium|high` sends `reasoning_effort` with each request; it is omitted when unset.
+
+Two optional quality passes target smaller local models; both are off by default and work with either auth mode:
+
+```sh
+node /path/to/onmhj/bin/onmhj.js config --report-segment-agent=true --report-revise=true
+```
+
+`--report-segment-agent=true` asks the model to split sessions larger than one 20 KiB chunk at topic boundaries, using only a turn index (time, size, and the first 200 characters of each prompt and answer). Invalid plans fall back to byte packing, and oversized segments are split by bytes. `--report-revise=true` rewrites each validated task from its source turns and later turns of the same sessions, then validates the whole report again; any task or report that fails validation keeps the draft. Expect roughly twice the generation time.
+
+For smaller local models, `--report-pipeline=facts` replaces summary-based generation with a fact-first pipeline (extraction, goal grouping, cited writing, verification). Recommended settings for a local OpenAI-compatible server such as Basalt:
+
+```sh
+node /path/to/onmhj/bin/onmhj.js config \
+  --report-auth=api --report-pipeline=facts --report-segment-agent=true \
+  --report-api-effort=medium --report-api-light-effort=none --report-prefetch=true
+```
+
+The fact pipeline does not use `--report-revise`; when both are set, the revision setting is ignored and `report_revise_ignored` is logged. `--report-api-light-effort` applies only to short judgment steps; extraction and writing keep `--report-api-effort`. Leave it unset for servers that do not accept that effort value. `--report-prefetch=true` makes each `catchup` extract today's new turns ahead of time.
+
 Config is stored at:
 
 ```txt

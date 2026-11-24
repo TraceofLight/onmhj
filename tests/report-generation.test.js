@@ -588,7 +588,106 @@ test('generates a validated report with OpenAI-compatible API auth', async () =>
   assert.equal(request.options.headers.Authorization, 'Bearer secret-value');
   assert.ok(request.options.signal instanceof AbortSignal);
   assert.equal(request.body.model, 'report-model');
+  assert.equal(request.body.stream, true);
   assert.match(request.body.messages[0].content, /implemented automatic reports/);
+});
+
+test('reads the API key from a key file and sends the configured reasoning effort', async () => {
+  const requests = [];
+  const cfg = {
+    reportAuth: 'api',
+    reportApiBaseUrl: 'https://llm.example/v1',
+    reportApiModel: 'report-model',
+    reportApiKeyEnv: 'ONMHJ_TEST_KEY',
+    reportApiKeyFile: '/keys/file',
+    reportApiEffort: 'medium',
+  };
+  const files = [
+    'refs:\n  OTHER_KEY: other-value\n  ONMHJ_TEST_KEY: file-secret # comment\n',
+    'ONMHJ_TEST_KEY="file-secret"\n',
+    '\uFEFFfile-secret\r\n',
+  ];
+  for (const text of files) {
+    await onmhj.generateReport(cfg, date, simpleRaw, {
+      env: {},
+      readFile(file) {
+        assert.equal(file, '/keys/file');
+        return text;
+      },
+      async requestApi(_url, options, body) {
+        requests.push({ options, body });
+        return { choices: [{ message: { content: validReport() } }] };
+      },
+    });
+  }
+
+  assert.deepEqual(requests.map((request) => request.options.headers.Authorization), Array(3).fill('Bearer file-secret'));
+  assert.ok(requests.every((request) => request.body.reasoning_effort === 'medium'));
+});
+
+test('prefers the API key environment variable and omits unset reasoning effort', async () => {
+  let request;
+  await onmhj.generateReport(
+    { reportAuth: 'api', reportApiBaseUrl: 'https://llm.example/v1', reportApiModel: 'm', reportApiKeyEnv: 'ONMHJ_TEST_KEY', reportApiKeyFile: '/keys/file' },
+    date,
+    simpleRaw,
+    {
+      env: { ONMHJ_TEST_KEY: 'env-secret' },
+      readFile() {
+        throw new Error('key file must not be read');
+      },
+      async requestApi(_url, options, body) {
+        request = { options, body };
+        return { choices: [{ message: { content: validReport() } }] };
+      },
+    },
+  );
+
+  assert.equal(request.options.headers.Authorization, 'Bearer env-secret');
+  assert.equal('reasoning_effort' in request.body, false);
+});
+
+test('rejects a key file without the named key', async () => {
+  await assert.rejects(
+    () => onmhj.generateReport(
+      { reportAuth: 'api', reportApiBaseUrl: 'https://llm.example/v1', reportApiModel: 'm', reportApiKeyEnv: 'ONMHJ_TEST_KEY', reportApiKeyFile: '/keys/file' },
+      date,
+      simpleRaw,
+      { env: {}, readFile: () => 'refs:\n  OTHER_KEY: other-value\n' },
+    ),
+    /report API key is missing: ONMHJ_TEST_KEY \(env or \/keys\/file\)/,
+  );
+});
+
+test('revises a validated API report and keeps the draft when the revision breaks the contract', async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onmhj-revise-'));
+  const cfg = {
+    stateDir,
+    reportAuth: 'api',
+    reportApiBaseUrl: 'https://llm.example/v1',
+    reportApiModel: 'report-model',
+    reportApiKeyEnv: 'ONMHJ_TEST_KEY',
+    reportRevise: true,
+  };
+  const revisedTask = validReport().slice(validReport().indexOf('### T1.')).replace('- 검증 완료', '- 검증을 완료했다.').trim();
+  const run = async (reviseOutput) => onmhj.generateReport(cfg, date, simpleRaw, {
+    env: { ONMHJ_TEST_KEY: 'secret-value' },
+    async requestApi(_url, _options, body) {
+      const prompt = body.messages[0].content;
+      if (prompt.startsWith('너는')) return { choices: [{ message: { content: reviseOutput } }] };
+      if (prompt.startsWith('다음은 하루 작업 보고서')) return { choices: [{ message: { content: '- 자동 보고서를 구현했다.' } }] };
+      return { choices: [{ message: { content: validReport() } }] };
+    },
+  });
+
+  const revised = await run(revisedTask);
+  assert.match(revised, /- 검증을 완료했다\./);
+  assert.match(revised, /## 오늘의 요약\n\n- 자동 보고서를 구현했다\./);
+
+  const kept = await run('### T9. 다른 번호');
+  assert.match(kept, /- 검증 완료\n/);
+  assert.match(kept, /## 오늘의 요약\n\n- 자동 보고서를 구현했다\./);
+  fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
 test('rejects incomplete API configuration before requesting a report', async () => {
@@ -611,6 +710,46 @@ test('reports non-JSON API gateway failures clearly', async () => {
       }),
     ),
     /HTTP 504: Gateway Timeout/,
+  );
+});
+
+test('collects streamed API content and drops reasoning deltas', async () => {
+  const chunk = (delta) => `data: ${JSON.stringify({ choices: [{ index: 0, delta }] })}\n\n`;
+  let sentBody;
+  const value = await onmhj.requestApi(
+    'https://llm.example/v1/chat/completions',
+    { method: 'POST' },
+    { model: 'report-model', stream: true },
+    async (_url, options) => {
+      sentBody = JSON.parse(options.body);
+      return {
+        ok: true,
+        status: 200,
+        text: async () => [
+          chunk({ role: 'assistant', content: '' }),
+          ': keep-alive\n\n',
+          chunk({ reasoning_content: 'thinking' }),
+          chunk({ content: '# 보고' }),
+          chunk({ content: '서' }),
+          'data: [DONE]\n\n',
+        ].join(''),
+      };
+    },
+  );
+
+  assert.equal(sentBody.stream, true);
+  assert.deepEqual(value, { choices: [{ message: { content: '# 보고서' } }] });
+});
+
+test('reports errors sent inside an API event stream', async () => {
+  await assert.rejects(
+    () => onmhj.requestApi(
+      'https://llm.example/v1/chat/completions',
+      { method: 'POST' },
+      { model: 'report-model', stream: true },
+      async () => ({ ok: true, status: 200, text: async () => 'data: {"error":{"message":"context overflow"}}\n\n' }),
+    ),
+    /report API failed: context overflow/,
   );
 });
 

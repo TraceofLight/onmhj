@@ -1,5 +1,7 @@
 const crypto = require('node:crypto');
 
+const { segmentTurns } = require('./conversation-segments');
+
 const DEFAULT_TARGET_BYTES = 20 * 1024;
 
 function sha256(value) {
@@ -49,6 +51,42 @@ function sessionGroups(records) {
     .sort((a, b) => a[0].timestamp.localeCompare(b[0].timestamp) || a[0].index - b[0].index);
 }
 
+// Uses a session's planned topic segments only when they cover its records exactly and in order.
+function plannedSegments(group, segmentsBySession) {
+  const planned = segmentsBySession && segmentsBySession[group[0].sessionKey];
+  if (!Array.isArray(planned) || planned.length < 2) return null;
+  const ids = planned.flat();
+  if (ids.length !== group.length || ids.some((id, i) => id !== group[i].evidenceId)) return null;
+  let offset = 0;
+  return planned.map(segment => group.slice(offset, (offset += segment.length)));
+}
+
+// Asks the segment planner to split sessions larger than the chunk target at topic boundaries.
+async function planRawSegments(raw, { targetBytes = DEFAULT_TARGET_BYTES, runPrompt, cache = null }) {
+  const plans = {};
+  for (const group of sessionGroups(parseRawRecords(raw))) {
+    if (group[0].sessionKey.startsWith('event:')) continue;
+    if (group.reduce((sum, record) => sum + record.bytes, 0) <= targetBytes) continue;
+    const key = JSON.stringify({ targetBytes, lines: group.map(record => record.line) });
+    const stored = cache && cache.read(key);
+    if (stored) {
+      if (stored.planned) plans[group[0].sessionKey] = stored.segments;
+      continue;
+    }
+    const turns = group.map(record => ({
+      id: record.evidenceId,
+      bytes: record.bytes,
+      time: record.timestamp.slice(11, 16),
+      prompt: record.event.prompt,
+      answer: record.event.assistantResponse,
+    }));
+    const result = await segmentTurns(turns, { budgetBytes: targetBytes, runPrompt });
+    if (cache) cache.write(key, { planned: result.planned, segments: result.segments });
+    if (result.planned) plans[group[0].sessionKey] = result.segments;
+  }
+  return plans;
+}
+
 function chunkRawEvents(raw, options = {}) {
   const targetBytes = options.targetBytes ?? DEFAULT_TARGET_BYTES;
   if (!Number.isInteger(targetBytes) || targetBytes < 1) throw new Error('targetBytes must be a positive integer');
@@ -64,13 +102,13 @@ function chunkRawEvents(raw, options = {}) {
     currentBytes = 0;
   };
 
-  for (const group of groups) {
+  const pack = (group) => {
     const groupBytes = group.reduce((sum, record) => sum + record.bytes, 0);
     if (groupBytes <= targetBytes) {
       if (current.length && currentBytes + groupBytes > targetBytes) flush();
       current.push(...group);
       currentBytes += groupBytes;
-      continue;
+      return;
     }
 
     flush();
@@ -80,6 +118,12 @@ function chunkRawEvents(raw, options = {}) {
       currentBytes += record.bytes;
       if (currentBytes >= targetBytes) flush();
     }
+  };
+
+  for (const group of groups) {
+    const segments = plannedSegments(group, options.segments);
+    if (segments) segments.forEach(pack);
+    else pack(group);
   }
   flush();
 
@@ -107,4 +151,5 @@ module.exports = {
   DEFAULT_TARGET_BYTES,
   chunkRawEvents,
   parseRawRecords,
+  planRawSegments,
 };

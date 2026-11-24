@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added `--report-pipeline=facts`, a fact-first pipeline for local models: per-chunk fact extraction (kind, epistemic status, exact values) chained per session, goal planning with voted turn assignment, model-decided reassignment of off-topic facts, one-call review that also drops superseded facts, cited task writing with evidence markers, line-level verification, and extractive per-task summaries.
+- Added `--report-api-light-effort` to run the short pipeline judgments (grouping, review, verification, summary picks) at a lighter reasoning effort; on Basalt `none` disables thinking for them, which cut report time by about three quarters on the test days without measurable quality loss.
+- Added `--report-prefetch` to extract today's facts on every `catchup`; extraction is cached per chunk, so the nightly report mostly reuses finished chunks.
+- Logged per-stage call counts and timing in `report_facts`.
+- Added `--report-api-key-file` so API mode can read its key from a file when the environment variable is absent, as in scheduled `catchup` runs.
+- Added `--report-api-effort` to send `reasoning_effort` with API report requests.
+- Streamed API report responses so long reasoning no longer hits proxy idle timeouts such as Cloudflare 524.
+- Added `--report-segment-agent`: a model plans topic boundaries for sessions larger than one chunk from a compact turn index; code validates the plan, splits oversized segments by bytes, caches it per raw input, and falls back to byte packing.
+- Added `--report-revise`: after validation, each task is rewritten from its source turns (including later turns of the same sessions) with checks for values missing from the evidence, untranslated English phrases, glued hashes, and foreign scripts; a broken revision keeps the validated draft.
+
 ## 0.1.16 - 2026-11-17
 
 - Captured DeepSeek Harness (DSH) sessions from `$DSH_HOME/sessions` as `dsh` turns, skipping subagent sessions and parent history copied into forked sessions, and extending the last human turn with answers from prompt-less continuation turns.
