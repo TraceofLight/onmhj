@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.19 - 2026-11-25
+
+- Ran `/ejmhj` through `bin/onmhj-node` like `/onmhj`, so it no longer fails when `node` is not on `PATH`.
+- Split `bin/onmhj.js` into responsibility modules under `bin/cli/`; the entry path, exports, outputs, and behavior are unchanged.
+- Rewrote the README around what the plugin does and moved implementation details to `docs/internals.md` (Korean: `docs/internals.ko.md`); the Korean README now uses a polite formal style.
+
 ## 0.1.18 - 2026-11-25
 
 - Escaped `~` as `\~` in every validated report (outside code and URLs) so range marks such as `1~2` no longer render as GitHub strikethrough; the prior-report preservation check compares escaped lines.
