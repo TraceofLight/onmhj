@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.18 - 2026-11-25
+
 - Escaped `~` as `\~` in every validated report (outside code and URLs) so range marks such as `1~2` no longer render as GitHub strikethrough; the prior-report preservation check compares escaped lines.
 
 ## 0.1.17 - 2026-11-24
