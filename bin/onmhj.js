@@ -14,6 +14,7 @@ const {
   parseDshRecord,
 } = require('./session-parsers');
 const { DEFAULT_TARGET_BYTES, chunkRawEvents, planRawSegments } = require('./report-chunks');
+const { escapeReportTildes } = require('./report-markdown');
 const { reviseReport } = require('./report-revise');
 const { generateFactReport, prefetchExtraction } = require('./report-facts');
 const { cleanupMapCache, mapRawEvidence, reduceMapSummaries } = require('./report-map-reduce');
@@ -1988,15 +1989,16 @@ function validateReport(value, date, language = 'ko', previousReport = '', refer
   if (options.requireTaskFormat && !taskFormat) throw new Error('report must use task format');
   if (taskFormat) validateTaskReport(report, contract, references);
   else validateLegacyReport(report, contract, references);
+  const escaped = escapeReportTildes(report);
   const remaining = new Map();
-  for (const line of report.replace(/\r\n/g, '\n').split('\n')) remaining.set(line, (remaining.get(line) || 0) + 1);
-  const priorLines = String(previousReport).replace(/\r\n/g, '\n').split('\n');
+  for (const line of escaped.replace(/\r\n/g, '\n').split('\n')) remaining.set(line, (remaining.get(line) || 0) + 1);
+  const priorLines = escapeReportTildes(String(previousReport).replace(/\r\n/g, '\n')).split('\n');
   for (const line of priorLines.filter(line => line && !/^#{1,6}\s/.test(line))) {
     const count = remaining.get(line) || 0;
     if (!count) throw new Error('report must preserve prior report content');
     remaining.set(line, count - 1);
   }
-  return report;
+  return escaped;
 }
 
 function runAgent(command, args, input, options = {}) {

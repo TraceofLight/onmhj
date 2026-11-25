@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Escaped `~` as `\~` in every validated report (outside code and URLs) so range marks such as `1~2` no longer render as GitHub strikethrough; the prior-report preservation check compares escaped lines.
+
 ## 0.1.17 - 2026-11-24
 
 - Added `--report-pipeline=facts`, an opt-in fact-first pipeline for smaller local models (default stays `summary`): per-chunk fact extraction with kind, epistemic status, importance, and exact values, chained per session; goal planning with five voted turn assignments; model-decided reassignment of off-topic facts; one-call review that also drops superseded facts; cited task writing sized to the work actually done; kind-based section placement; line-level verification; and one grounded summary sentence per task. On the test days it reached Claude-level scores on a local Qwen model; with Claude it costs 2.5-3.7x the tokens without a quality gain, so keep `summary` for Claude and Codex.
