@@ -10,7 +10,7 @@ function xmlEscape(value) {
 }
 
 function launchdPlan(ctx) {
-  const file = path.join(ctx.home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
+  const file = path.posix.join(ctx.home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
   const domain = `gui/${ctx.uid}`;
   const args = ctx.command.map(value => `    <string>${xmlEscape(value)}</string>`).join('\n');
   const env = Object.entries(ctx.env)
@@ -55,7 +55,7 @@ function systemdQuote(value) {
 }
 
 function systemdPlan(ctx) {
-  const dir = path.join(ctx.home, '.config', 'systemd', 'user');
+  const dir = path.posix.join(ctx.home, '.config', 'systemd', 'user');
   const env = Object.entries(ctx.env).map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`).join('\n');
   const service = `[Unit]
 Description=onmhj session catch-up
@@ -78,8 +78,8 @@ WantedBy=timers.target
 `;
   return {
     files: [
-      { path: path.join(dir, `${TASK_NAME}.service`), content: service },
-      { path: path.join(dir, `${TASK_NAME}.timer`), content: timer },
+      { path: path.posix.join(dir, `${TASK_NAME}.service`), content: service },
+      { path: path.posix.join(dir, `${TASK_NAME}.timer`), content: timer },
     ],
     install: [
       { args: ['systemctl', '--user', 'daemon-reload'] },

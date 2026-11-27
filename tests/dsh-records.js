@@ -57,9 +57,10 @@ function appendFrames(file, records) {
 
 // Points every discovered session root at an empty temporary home so tests never read real transcripts.
 function withSessionHomes(root, fn) {
-  const keys = ['HOME', 'CODEX_HOME', 'DSH_HOME'];
+  const keys = ['HOME', 'USERPROFILE', 'CODEX_HOME', 'DSH_HOME'];
   const previous = keys.map(key => process.env[key]);
   process.env.HOME = path.join(root, 'home');
+  process.env.USERPROFILE = process.env.HOME; // os.homedir() reads USERPROFILE on Windows
   process.env.CODEX_HOME = path.join(root, 'codex');
   process.env.DSH_HOME = path.join(root, 'dsh');
   return Promise.resolve().then(fn).finally(() => keys.forEach((key, index) => {
